@@ -1,6 +1,6 @@
-package org.jetbrains.plugins.template.services
+package com.github.stevenreiss.bubjet.services
 
-import org.jetbrains.plugins.template.MyBundle
+import com.github.stevenreiss.bubjet.MyBundle
 
 class MyApplicationService {
 
