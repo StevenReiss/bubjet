@@ -1,18 +1,93 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <id>com.github.stevenreiss.bubjet</id>
+    <id>edu.brown.cs.bubbles.bubjet</id>
     <name>bubjet</name>
     <vendor>stevenreiss</vendor>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.xdebugger</depends>
+    <depends>com.intellij.java</depends>
+    <depends>com.intellij.modules.java</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <applicationService serviceImplementation="com.github.stevenreiss.bubjet.services.MyApplicationService"/>
-        <projectService serviceImplementation="com.github.stevenreiss.bubjet.services.MyProjectService"/>
+	<applicationService serviceImplementation="edu.brown.cs.bubbles.bubjet.BubjetApplicationService"/>
+	<projectService serviceImplementation="edu.brown.cs.bubbles.bubjet.BubjetProjectService"/>
     </extensions>
 
     <applicationListeners>
-        <listener class="com.github.stevenreiss.bubjet.listeners.MyProjectManagerListener"
-                  topic="com.intellij.openapi.project.ProjectManagerListener"/>
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProjectManagerListener"
+		  topic="com.intellij.openapi.project.ProjectManagerListener"/>
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetAsyncFileListener"
+		  topic="com.intellij.openapi.vfs.AsyncFileListener"/>
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetBulkFileListener"
+		  topic="com.intellij.openapi.vfsBulkFileListener"/>
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetVirtualFileListener"
+		  topic="com.intellij.openapi.vfs.VirtualFileListener"/>
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetCommandListener"
+		  topic="com.intellij.openapi.command.CommandListener"/>
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProgressManagerListener"
+		  topic="com.intellij.openapi.progress.ProgressManagerListener"/>
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetAppListener"
+		  topic="com.intellij.ide.AppLifecycleListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetDebuggerListener"
+		  topic="com.intellij.xdebugger.XDebuggerManagerListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetDebugSessionListener"
+		  topic="com.intellij.xdebugger.XDebugSessionListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetEditorHintListener"
+		  topic="com.intellij.codeInsight.hint.EditorHintListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetPsiDocumentListener"
+		  topic="com.intellij.psi.PsiDocumentListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetPsiDocumentListener"
+		  topic="com.intellij.psi.impl.AnyPsiChangeListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetPsiDocumentListener"
+		  topic="com.intellij.psi.impl.PsiDocumentTransactionListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProjectTaskListener"
+		  topic="com.intellij.task.ProjectTaskListener" />
+<!--	<listener class="edu.brown.cs.bubbles.bubjet.BubjetCompilationStatusListener"
+		  topic="com.intellij.openapi.compiler.CompilationStatusListener" />      -->
     </applicationListeners>
+
+    <projectListeners>
+       <listener class="edu.brown.cs.bubbles.bubjet.BubjetToolWindowListener"
+		 topic="com.intellij.openapi.wm.ex.ToolWindowManagerListener" />
+       <listener class="edu.brown.cs.bubbles.bubjet.BubjetExecutionListener"
+		 topic="com.intellij.execution.ExecutionListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProjectTaskListener"
+		  topic="com.intellij.task.ProjectTaskListener" />
+
+<!--	<listener class="edu.brown.cs.bubbles.bubjet.BubjetCompilationStatusListener"
+		  topic="com.intellij.openapi.compiler.CompilationStatusListener" />
+	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProblemListener"
+		  topic="com.intellij.problems.ProblemListener" />     -->
+    </projectListeners>
+
+
 </idea-plugin>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
