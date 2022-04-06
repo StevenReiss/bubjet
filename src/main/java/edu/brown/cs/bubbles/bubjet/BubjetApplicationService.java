@@ -14,6 +14,7 @@ import java.util.Map;
 
 import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ex.ApplicationEx;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.project.Project;
 
@@ -35,6 +36,9 @@ private BubjetSearchManager search_manager;
 private Map<Project,BubjetLaunchManager> launch_managers;
 private Map<Project,BubjetBreakpointManager> break_managers;
 private Map<Project,BubjetEditManager> edit_managers;
+private Map<Project,BubjetExecutionManager> execution_managers;
+private Map<Project,BubjetEvaluationManager> evaluation_managers;
+private Map<Project,BubjetPreferenceManager> preference_managers;
 
 
 
@@ -56,7 +60,10 @@ public BubjetApplicationService()
    break_managers = new HashMap<>();
    launch_managers = new HashMap<>();
    edit_managers = new HashMap<>();
+   execution_managers = new HashMap<>();
+   evaluation_managers = new HashMap<>();
    bubjet_monitors = new HashMap<>();
+   preference_managers = new HashMap<>();
 }
 
 
@@ -93,10 +100,35 @@ BubjetLaunchManager getLaunchManager(Project p)
 {
    BubjetLaunchManager lm = launch_managers.get(p);
    if (lm == null) {
+      if (p == null) return null;
       lm = new BubjetLaunchManager(this,p);
       launch_managers.put(p,lm);
     }
    return lm;
+}
+
+
+BubjetExecutionManager getExecutionManager(Project p)
+{
+   BubjetExecutionManager em = execution_managers.get(p);
+   if (em == null) {
+      if (p == null) return null;
+      em = new BubjetExecutionManager(this,p);
+      execution_managers.put(p,em);
+    }
+   return em;
+}
+
+
+BubjetEvaluationManager getEvaluationManager(Project p)
+{
+   BubjetEvaluationManager em = evaluation_managers.get(p);
+   if (em == null) {
+      if (p == null) return null;
+      em = new BubjetEvaluationManager(this,p);
+      evaluation_managers.put(p,em);
+    }
+   return em;
 }
 
 
@@ -122,6 +154,20 @@ synchronized BubjetEditManager getEditManager(Project p)
 }
 
 
+
+synchronized BubjetPreferenceManager getPreferenceManager(Project p)
+{
+   BubjetPreferenceManager pm = preference_managers.get(p);
+   if (pm == null) {
+      pm = new BubjetPreferenceManager(this,p);
+      preference_managers.put(p,pm);
+    }
+   return pm;
+}
+
+
+
+
 /********************************************************************************/
 /*                                                                              */
 /*      Project methods                                                         */
@@ -133,6 +179,7 @@ void addProject(Project project)
    project_manager.addProject(project);
    getBreakpointManager(project);
    getLaunchManager(project);
+   getExecutionManager(project);
 }
 
 
@@ -155,7 +202,7 @@ void exit()
 }
 
 
-private class ExitAction extends BubjetAction.Command {
+private class ExitAction extends BubjetAction.SimpleCommand {
    
    ExitAction() {
       super(null,null,null);
@@ -169,6 +216,13 @@ private class ExitAction extends BubjetAction.Command {
       app.saveAll();
       app.saveSettings();
       if (app.isCommandLine() || app.isHeadlessEnvironment()) app.exit(false,false,false);
+      if (app instanceof ApplicationEx) {
+         ApplicationEx aex = (ApplicationEx) app;
+         aex.exit(true,false);
+       }
+      else {
+         app.exit(false,false,false);
+       }
     }
 }       // end of inner class ExitAction
 

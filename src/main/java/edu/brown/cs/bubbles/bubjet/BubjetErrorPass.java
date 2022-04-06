@@ -23,10 +23,8 @@
 package edu.brown.cs.bubbles.bubjet;
 
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiErrorElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiRecursiveElementWalkingVisitor;
-import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.ReflectionUtil;
 
 import java.util.ArrayList;
@@ -44,7 +42,7 @@ import com.intellij.lang.annotation.HighlightSeverity;
 
 import edu.brown.cs.ivy.xml.IvyXmlWriter;
 
-class BubjetErrorPass implements BubjetConstants
+class BubjetErrorPass extends BubjetAction.Read implements BubjetConstants
 {
 
 
@@ -55,7 +53,7 @@ class BubjetErrorPass implements BubjetConstants
 /********************************************************************************/
 
 private BubjetFileData          file_data;
-private String                  bubbles_id;
+private String                  buffer_id;
 private int                     edit_id;
 
 /********************************************************************************/
@@ -64,12 +62,27 @@ private int                     edit_id;
 /*                                                                              */
 /********************************************************************************/
 
-BubjetErrorPass(BubjetFileData fd,String bid,int id)
+BubjetErrorPass(BubjetFileData fd,String bid,int id,String progress)
 {
+   super(fd.getProject(),progress);
    file_data = fd;
-   bubbles_id = bid;
+   buffer_id = bid;
    edit_id = id;
 }
+
+
+
+BubjetErrorPass(BubjetEditManager edm,PsiFile pf,boolean update) 
+{
+   super(pf.getProject(),"*");
+   file_data = edm.findFile(pf.getVirtualFile(),"*");
+   buffer_id = null;
+   edit_id = 0;
+   if (update && file_data != null) {
+      file_data.updatePsiFile();
+    }
+}
+
 
 
 /********************************************************************************/
@@ -80,18 +93,21 @@ BubjetErrorPass(BubjetFileData fd,String bid,int id)
 
 void process()
 {
-   PsiFile pf = file_data.getPsiFile();
-   String what = (file_data.isPrivateId(bubbles_id) ? "PRIVATEERROR" : "FILEERROR");
+   BubjetLog.logD("ERROR PASS PROCESS " + file_data + " " + file_data.getModule() + " " + buffer_id);
+   if (file_data == null) return;
+   if (file_data.getModule() == null) return;
+   String what = (file_data.isPrivateId(buffer_id) ? "PRIVATEERROR" : "FILEERROR");
    IvyXmlWriter xw = file_data.getMonitor().beginMessage(what);
    xw.field("FILE",BubjetUtil.outputFileName(file_data.getVirutalFile()));
    xw.field("PROJECT",file_data.getModule().getName());
    xw.begin("MESSAGES");
-   for (PsiErrorElement err : PsiTreeUtil.collectElementsOfType(pf,PsiErrorElement.class)) {
-      BubjetLog.logD("FOUND ERROR ELEMENT: " + err + " " + err.getContainingFile() + " " +
-            err.getTextRange() + " " + err.getParent() + " " + err.getParent().getTextRange() + " " +
-               err.getChildren().length + " " + err.getErrorDescription());
+// PsiFile pf = file_data.getPsiFile();
+// for (PsiErrorElement err : PsiTreeUtil.collectElementsOfType(pf,PsiErrorElement.class)) {
+//    BubjetLog.logD("FOUND ERROR ELEMENT: " + err + " " + err.getContainingFile() + " " +
+//          err.getTextRange() + " " + err.getParent() + " " + err.getParent().getTextRange() + " " +
+//             err.getChildren().length + " " + err.getErrorDescription());
 //    BubjetUtil.outputProblem(file_data.getProject(),file_data.getDocument(),err,xw);
-    }
+//  }
    scanForErrors(xw);
    xw.end("MESSAGES");
    if (checkCurrent()) {
@@ -109,7 +125,7 @@ void process()
 
 private void scanForErrors(IvyXmlWriter xw)
 {
-   ErrorScanner ev = new ErrorScanner(xw);
+   ErrorScanner ev = new ErrorScanner(buffer_id,xw);
    BubjetLog.logD("START SCAN");
    boolean fg = ev.scan();
    BubjetLog.logD("FINISH SCAN " + fg);
@@ -121,7 +137,7 @@ private void scanForErrors(IvyXmlWriter xw)
 
 private boolean checkCurrent()
 {
-   boolean fg = file_data.isCurrent(bubbles_id,edit_id);
+   boolean fg = file_data.isCurrent(buffer_id,edit_id);
    if (!fg) BubjetLog.logD("ERROR PASS NOT CURRENT");
    
    return fg;
@@ -140,8 +156,10 @@ private class ErrorScanner {
    private ErrorHolder  our_holder;
    private List<Annotator> our_annotators;
    private List<HighlightVisitor> our_visitors;
+   private String buffer_id;
    
-   ErrorScanner(IvyXmlWriter xw) { 
+   ErrorScanner(String bid,IvyXmlWriter xw) { 
+      buffer_id = bid;
       our_holder = new ErrorHolder(xw);
       our_annotators = new ArrayList<>();
       Language lang = LanguageUtil.getLanguageForPsi(file_data.getProject(),file_data.getVirutalFile());
@@ -174,8 +192,9 @@ private class ErrorScanner {
       boolean rslt = true;
       for (HighlightVisitor hv : our_visitors) {
          BubjetLog.logD("RUN VISITOR " + hv + " " + hv.suitableForFile(file_data.getPsiFile()));
-         if (hv.suitableForFile(file_data.getPsiFile())) {
-            boolean fg = hv.analyze(file_data.getPsiFile(),true,our_holder,new ErrorRunner(hv));
+         if (hv.suitableForFile(file_data.getPsiFile(buffer_id))) {
+            boolean fg = hv.analyze(file_data.getPsiFile(buffer_id),
+                  true,our_holder,new ErrorRunner(hv)); 
             rslt &= fg;
           }
        }

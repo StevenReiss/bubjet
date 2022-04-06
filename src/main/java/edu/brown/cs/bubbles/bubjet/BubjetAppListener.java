@@ -38,40 +38,41 @@ public class BubjetAppListener implements AppLifecycleListener
 
 @Override public void appFrameCreated(List<String> args)
 {
-   BubjetLog.logD("AppFrameCreated " + args);
-   
    BubjetBundle bndl = BubjetBundle.INSTANCE;
-   BubjetLog.logD("Created bumdle on appFrameCreated " + bndl);
+   BubjetLog.logD("Created bundle on appFrameCreated " + bndl);
+   BubjetLog.logD("APP appFrameCreated " + args);
 }
 
 
 @Override public void welcomeScreenDisplayed()
 {
-   BubjetLog.logD("WelcomeScreenDisplayed");
+   BubjetBundle bndl = BubjetBundle.INSTANCE;
+   BubjetLog.logD("APP welcomeScreenDisplayed " + bndl);
 }
 
 
 @Override public void projectFrameClosed()
 {
-   BubjetLog.logD("ProjectFrameClosed");
+   BubjetLog.logD("APP projectFrameClosed");
 }
 
 
 @Override public void projectOpenFailed()
 {
-   BubjetLog.logD("ProjectOpenFailed");
+   BubjetBundle bndl = BubjetBundle.INSTANCE;
+   BubjetLog.logD("APP projectOpenFailed " + bndl);
 }
 
 
 @Override public void appClosing()
 {
-   BubjetLog.logD("AppClosing");
+   BubjetLog.logD("APP appClosing");
 }
 
 
 @Override public void appWillBeClosed(boolean restart)
 {
-   BubjetLog.logD("AppWillBeClosed " + restart);
+   BubjetLog.logD("APP appWillBeClosed " + restart);
 }
 
 

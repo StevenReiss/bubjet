@@ -1,4 +1,3 @@
-
 /********************************************************************************/
 /*                                                                              */
 /*              BubjetUtil.java                                                 */
@@ -25,6 +24,12 @@ package edu.brown.cs.bubbles.bubjet;
 
 import java.io.File;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.jetbrains.java.debugger.breakpoints.properties.JavaBreakpointProperties;
@@ -39,6 +44,7 @@ import com.intellij.codeInsight.completion.PrefixMatcher;
 import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.codeInsight.lookup.LookupElement;
 import com.intellij.compiler.CompilerMessageImpl;
+import com.intellij.debugger.engine.SuspendContextImpl;
 import com.intellij.execution.RunnerAndConfigurationSettings;
 import com.intellij.execution.application.ApplicationConfiguration;
 import com.intellij.execution.configurations.ModuleBasedConfiguration;
@@ -52,12 +58,19 @@ import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleManager;
 import com.intellij.openapi.module.ModuleUtilCore;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.projectRoots.Sdk;
+import com.intellij.openapi.roots.ContentEntry;
+import com.intellij.openapi.roots.ModuleRootManager;
+import com.intellij.openapi.roots.OrderEntry;
+import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.JavaElementVisitor;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.JavaTokenType;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationOwner;
@@ -66,12 +79,14 @@ import com.intellij.psi.PsiClassInitializer;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiComment;
 import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiEnumConstant;
 import com.intellij.psi.PsiErrorElement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiIdentifier;
+import com.intellij.psi.PsiJavaCodeReferenceElement;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiLocalVariable;
 import com.intellij.psi.PsiManager;
@@ -92,6 +107,7 @@ import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.PsiWhiteSpace;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.search.ProjectScope;
 import com.intellij.psi.search.searches.ClassInheritorsSearch;
 import com.intellij.psi.tree.IElementType;
 import com.intellij.psi.impl.search.JavaFilesSearchScope;
@@ -107,7 +123,26 @@ import com.intellij.xdebugger.XSourcePosition;
 import com.intellij.xdebugger.breakpoints.SuspendPolicy;
 import com.intellij.xdebugger.breakpoints.XBreakpoint;
 import com.intellij.xdebugger.breakpoints.XBreakpointProperties;
+import com.sun.jdi.AbsentInformationException;
+import com.sun.jdi.Location;
+import com.sun.jdi.VMDisconnectedException;
+import com.sun.jdi.event.Event;
+import com.sun.jdi.event.ExceptionEvent;
+import com.sun.jdi.event.ThreadDeathEvent;
 
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BArray;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BClass;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BField;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BLocal;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BMethod;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BObject;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BPrimitive;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BStackFrame;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BString;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BThis;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BThread;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BValue;
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BVariable;
 import edu.brown.cs.ivy.xml.IvyXml;
 import edu.brown.cs.ivy.xml.IvyXmlWriter;
 
@@ -195,9 +230,9 @@ static int outputJavaElement(Module m,PsiElement elt,boolean children,
 
 private static class JavaElementOutput extends JavaElementVisitor {
    
-   private Module for_module;
-   private boolean do_children;
-   private IvyXmlWriter xml_writer;
+   private final Module for_module;
+   private final boolean do_children;
+   private final IvyXmlWriter xml_writer;
    private int output_count;
    
    JavaElementOutput(Module m,boolean child,IvyXmlWriter xw) {
@@ -279,14 +314,14 @@ private static class JavaElementOutput extends JavaElementVisitor {
       String tnm = "Function";
       if (pm.isConstructor()) tnm = "Constructor";
       outputNameInformation(pm,tnm,for_module,xml_writer);
-      if (do_children) {
+//      if (do_children) {
 //       for (PsiParameter pp : pm.getParameterList().getParameters()) {
 //          accept(pp);
 //        }
 //       for (PsiStatement ps : pm.getBody().getStatements()) {
 //          accept(ps);
 //        }
-       }
+//       }
     }
    
    @Override public void visitClassInitializer(PsiClassInitializer pi) {
@@ -355,7 +390,8 @@ private static boolean isThrowable(PsiClassType pt)
 static int getModifierFlags(PsiModifierList ml)
 {
    int flags = 0;
-   
+
+   if (ml == null) return flags;
    if (ml.hasModifierProperty(PsiModifier.PUBLIC)) flags |= Modifier.PUBLIC;
    if (ml.hasModifierProperty(PsiModifier.PROTECTED)) flags |= Modifier.PROTECTED;
    if (ml.hasModifierProperty(PsiModifier.PRIVATE)) flags |= Modifier.PRIVATE;
@@ -417,7 +453,7 @@ private static void outputNameInformation(PsiElement e,String tnm,Module m,IvyXm
    
    if (m == null) {
       PsiFile pf = e.getContainingFile();
-      m = ModuleUtilCore.findModuleForFile(pf);
+      m = BubjetUtil.findModuleForFile(pf);
     }
    if (m != null) xw.field("PROJECT",m.getName()); 
    
@@ -497,12 +533,12 @@ static String getKey(PsiElement e,Module m)
    
    if (m == null) {
       PsiFile pf = e.getContainingFile();
-      if (pf.getFileType().getName().equals("CLASS")) return null;
-      if (pf != null) m = ModuleUtilCore.findModuleForFile(pf);
+      if (pf != null && pf.getFileType().getName().equals("CLASS")) return null;
+      if (pf != null) m = BubjetUtil.findModuleForFile(pf);
       if (m == null) {
          BubjetLog.logD("Can't find module for " +
                   e + " " + e.getClass() + " " + pf + " " +
-            pf.getFileType().getName());
+            pf.getFileType());
 
        }
     }
@@ -527,7 +563,7 @@ static String getKey(PsiElement e,Module m)
    else if (e instanceof PsiLocalVariable) {
       typ = "V";
       PsiElement cont = findContainter(e);
-      if (cont != null && cont instanceof PsiMethod) {
+      if (cont instanceof PsiMethod) {
          PsiMethod pm = (PsiMethod) cont;
          key = getMemberKeyPart(pm);
          key += "!" + ((PsiLocalVariable) e).getName();
@@ -565,9 +601,6 @@ private static String getMemberKeyPart(PsiMember pm)
 
 
 
-
-
-
 private static boolean getVarArgs(PsiElement e)
 {
    if (e instanceof PsiParameterListOwner) {
@@ -601,7 +634,7 @@ static void outputTypeHierarchy(Set<PsiClass> clss,IvyXmlWriter xw)
 private static void outputTypeHierarchyElement(Set<PsiClass> clss,PsiClass pc,IvyXmlWriter xw)
 {
    PsiFile pf = pc.getContainingFile();
-   Module m = ModuleUtilCore.findModuleForFile(pf);
+   Module m = BubjetUtil.findModuleForFile(pf);
    GlobalSearchScope scp = getSearchScope(m);
    xw.begin("TYPE");
    xw.field("NAME",pc.getQualifiedName());
@@ -641,8 +674,8 @@ private static void outputTypeSubElement(String typ,Set<PsiClass> clss,PsiClass 
 
 private static class TypeHierProc implements Processor<PsiClass> {
  
-   private Set<PsiClass> class_set;
-   private IvyXmlWriter xml_writer;
+   private final Set<PsiClass> class_set;
+   private final IvyXmlWriter xml_writer;
    
    TypeHierProc(Set<PsiClass> clss,IvyXmlWriter xw) {
       class_set = clss;
@@ -667,12 +700,12 @@ private static class TypeHierProc implements Processor<PsiClass> {
 /*                                                                              */
 /********************************************************************************/
 
-static void outputLaunch(RunnerAndConfigurationSettings rcs,IvyXmlWriter xw)
+static void outputLaunchConfiguration(RunnerAndConfigurationSettings rcs,IvyXmlWriter xw)
 {
-   RunConfiguration rc = rcs.getConfiguration(); 
-   
-   if (rc == null) return;
-   
+   if (rcs == null) return;
+
+   RunConfiguration rc = rcs.getConfiguration();
+
    xw.begin("CONFIGURATION");
    xw.field("ID",rc.getUniqueID());
    xw.field("NAME",rc.getName());
@@ -763,8 +796,10 @@ static void outputMessage(Project p,CompilerMessage msg,IvyXmlWriter xw)
    int eoff = -1;
    if (msg.getNavigatable() != null && msg.getNavigatable() instanceof OpenFileDescriptor) {
       OpenFileDescriptor ofd = (OpenFileDescriptor) msg.getNavigatable();
-      soff = ofd.getRangeMarker().getStartOffset();
-      eoff = ofd.getRangeMarker().getEndOffset();
+      if (ofd.getRangeMarker() != null) {
+         soff = ofd.getRangeMarker().getStartOffset();
+         eoff = ofd.getRangeMarker().getEndOffset();
+      }
     }
    if (msg.getNavigatable() != null && msg.getNavigatable() instanceof PsiElement) {
       PsiElement psi = (PsiElement) msg.getNavigatable();
@@ -829,8 +864,10 @@ static void outputProblem(Project p,CompilerMessage msg,IvyXmlWriter xw)
    int eoff = -1;
    if (msg.getNavigatable() != null && msg.getNavigatable() instanceof OpenFileDescriptor) {
       OpenFileDescriptor ofd = (OpenFileDescriptor) msg.getNavigatable();
-      soff = ofd.getRangeMarker().getStartOffset();
-      eoff = ofd.getRangeMarker().getEndOffset();
+      if (ofd.getRangeMarker() != null) {
+         soff = ofd.getRangeMarker().getStartOffset();
+         eoff = ofd.getRangeMarker().getEndOffset();
+      }
     }
    if (msg.getNavigatable() != null && msg.getNavigatable() instanceof PsiElement) {
       PsiElement psi = (PsiElement) msg.getNavigatable();
@@ -861,7 +898,7 @@ static void outputProblem(Project p,CompilerMessage msg,IvyXmlWriter xw)
     }
    if (mod == null && vf != null) {
       PsiFile pf = PsiManager.getInstance(p).findFile(vf);
-      mod = ModuleUtilCore.findModuleForFile(pf).getName();
+      mod = BubjetUtil.findModuleForFile(pf).getName();
     }
    
    if (cmi != null && vf != null) {
@@ -902,8 +939,10 @@ static void outputProblem(Project p,Document doc,PsiErrorElement err,IvyXmlWrite
    
    xw.begin("PROBLEM");
    xw.field("ERROR",true);
-   
-   String mod = ModuleUtilCore.findModuleForFile(pf).getName();
+
+   Module m = BubjetUtil.findModuleForFile(pf);
+   String mod = null;
+   if (m != null) mod = m.getName();
    xw.field("PROJECT",mod);
    xw.field("FILE",outputFileName(pf));
    xw.field("LINE",lin);
@@ -928,7 +967,9 @@ static void outputProblem(BubjetFileData fd,HighlightInfo err,IvyXmlWriter xw)
    int eoff = err.getEndOffset();
    int line = fd.getDocument().getLineNumber(soff);
    PsiFile pf = fd.getPsiFile();
-   String mod = ModuleUtilCore.findModuleForFile(pf).getName();
+   Module m = BubjetUtil.findModuleForFile(pf);
+   String mod = null;
+   if (m != null) mod = m.getName();
    String msgtxt = err.getDescription();
    // probably need to fix up the message here
    msgtxt = IvyXml.xmlSanitize(msgtxt,true);
@@ -990,7 +1031,7 @@ static void outputBreakpoint(Project p,XBreakpoint<?> bpt,IvyXmlWriter xw)
    if (srcpos != null) {
       if (srcpos.getFile().isInLocalFileSystem()) {
          xw.field("FILE",outputFileName(srcpos.getFile()));
-         xw.field("LINE",srcpos.getLine());
+         xw.field("LINE",srcpos.getLine()+1);
          xw.field("STARTPOS",srcpos.getOffset());
          PsiFile pf = getPsiFile(p,srcpos.getFile());
          PsiElement pe = pf.findElementAt(srcpos.getOffset());
@@ -1079,7 +1120,7 @@ static void outputCompletion(CompletionResult r,int ct,int off,IvyXmlWriter xw)
       
    PsiElement pe = lookup.getPsiElement();
    int fgs = 0;
-   if (pe != null && pe instanceof PsiModifierListOwner) {
+   if (pe instanceof PsiModifierListOwner) {
       fgs = getModifierFlags(((PsiModifierListOwner) pe).getModifierList());
     }
    String kind = "OTHER";
@@ -1115,11 +1156,448 @@ static void outputCompletion(CompletionResult r,int ct,int off,IvyXmlWriter xw)
    else if (pe instanceof PsiVariable) {
       xw.field("DECLSIGN",ClassUtil.getBinaryPresentation(((PsiVariable) pe).getType()));
     }
+   int eoff = off; 
+   if (pm.getPrefix() != null) eoff += pm.getPrefix().length();
    xw.field("RELEVANCE",100-ct);
    xw.field("REPLACE_START",off);
-   xw.field("REPLACE_END",off);
+   xw.field("REPLACE_END",eoff);
          
    xw.end("COMPLETION");
+}
+
+
+
+
+/********************************************************************************/
+/*                                                                              */
+/*      Execution output                                                        */
+/*                                                                              */
+/********************************************************ProcessHandle**********/
+
+static void outputProcess(BubjetDebugProcess process,IvyXmlWriter xw,boolean showtarget)
+{
+   if (process == null) return;
+   
+   xw.begin("PROCESS");
+   xw.field("PID",process.getId());
+   xw.field("LABEL",process.getLaunchName());
+   if (process.isTerminated()) {
+      xw.field("TERMINATED",true);
+    }  
+   else {
+      xw.field("CANTERM",true);
+    }
+   xw.field("NAME",process.getLaunchName());
+   outputLaunch(process,xw);
+//   if (showtarget) {
+//    xw.begin("TARGET");
+//    xw.field("ID",ph.hashCode());
+//    if (ph.isProcessTerminated()) xw.field("TERMINATED",true);
+//    DISCONNECTED, CANDISCONNET
+//    PID
+//    outputLaunchConfiguration(env.getRunnerAndConfigurationSettings(),xw);
+//    xw.end("TARGET");
+//   }
+   xw.end("PROCESS");
+}
+
+
+
+static void outputLaunch(BubjetDebugProcess process,IvyXmlWriter xw)
+{
+   xw.begin("LAUNCH");
+   xw.field("MODE","debug");
+   xw.field("ID",process.getLaunchId());
+   RunnerAndConfigurationSettings cfg = process.getLaunchConfiguration();
+   xw.field("CID",cfg.getConfiguration().getUniqueID());
+   xw.end("LAUNCH");
+}
+
+
+static void outputThread(BubjetDebugProcess proc,BThread thrd,
+      SuspendContextImpl ctx,boolean forcerun,boolean forcedead,IvyXmlWriter xw) 
+{
+   if (thrd == null) return;
+   
+   boolean dead = forcedead;
+   String exception = null;
+   if (ctx != null && ctx.getEventSet() != null) {
+      for (Event e : ctx.getEventSet()) {
+         if (e instanceof ExceptionEvent) {
+            ExceptionEvent ee = (ExceptionEvent) e;
+            exception = ee.exception().getClass().getName();
+          }
+         else if (e instanceof ThreadDeathEvent) {
+            dead = true;
+          }
+       }
+    }
+   
+   xw.begin("THREAD");
+   if (!dead) { 
+      xw.field("NAME",thrd.getName());
+      xw.field("GROUP",thrd.getGroupName());
+    }
+   xw.field("ID",thrd.getUniqueId());
+   if (dead || forcerun) xw.field("STACK",false);
+   else {
+      int ct = thrd.getFrameCount(); 
+      if (ct > 0) {
+         xw.field("STACK",true);
+         xw.field("FRAMES",ct);
+       }
+      else xw.field("STACK",false);
+    }
+   String tnm = thrd.getValueType().getName();
+   if (tnm.contains("jdk.internal.")) xw.field("SYSTEM",true);
+   try {
+      if (!dead) {
+         if (!forcerun) xw.field("ATBREAKPOINT",thrd.isAtBreakpoint());
+         BValue bv = thrd.getFieldValue("daemon");
+         if (bv instanceof BPrimitive) {
+            BPrimitive bvp = (BPrimitive) bv;
+            if (bvp.booleanValue()) xw.field("DAEMON",true);
+          }
+       }
+    }
+   catch (VMDisconnectedException e) {
+      dead = true;
+    }
+   catch (Throwable t) {
+      BubjetLog.logE("Problem getting daemon value",t);
+    }
+   
+   if (!dead && thrd.isSuspended() && !forcerun) {
+      xw.field("SUSPENDED",true);
+      xw.field("CANRESUME",true);
+      xw.field("CANSTEPIN",true);
+      xw.field("CANSTEPOVER",true);
+      xw.field("CANSTEPOUT",true);
+    }
+   else if (dead || thrd.isTerminated() || forcedead) {
+      xw.field("TERMINATED",true);
+    }
+   else {
+      xw.field("CANSUSPEND",true);
+    }
+   
+   xw.field("PID",proc.getId());
+   
+   if (ctx != null && !forcerun) {
+      if (exception != null) xw.field("EXCEPTION",exception);
+      if (!ctx.isResumed()) {
+         Location loc = ctx.getLocation();
+         if (loc != null) {
+            xw.field("LOCLINE",loc.lineNumber());
+            xw.field("LOCMETHOD",loc.method());
+            String f1 = findSourceFile(proc,loc,false);
+            if (f1 != null) xw.field("LOCFILE",f1);
+         }
+       }
+    }
+   
+   outputLaunch(proc,xw);
+   
+   xw.end("THREAD");
+}
+
+
+
+static void outputStackFrame(BubjetDebugProcess proc,BStackFrame frm,int lvl,
+      int vdepth,int arraysz,IvyXmlWriter xw)
+{
+   xw.begin("STACKFRAME");
+   xw.field("NAME",frm.getMethodName());
+   xw.field("ID",frm.getUniqueId());
+   xw.field("CLASS",frm.getClassName());
+   xw.field("METHOD",frm.getClassName() + "." + frm.getMethodName());
+   xw.field("LINENO",frm.getLineNumber());
+   BMethod mthd = frm.getMethod();
+   if (mthd.isConstructor()) xw.field("CONSTRUCTOR",true);
+   if (mthd.isNative()) xw.field("NATIVE",true);
+   if (mthd.isStaticInitializer()) xw.field("INITIALIZER",true);
+   if (mthd.isVarArgs()) xw.field("VARARGS",true);
+   if (mthd.isStatic()) xw.field("STATIC",true);
+   if (mthd.isSynthetic()) xw.field("SYNTHETIC",true);
+   xw.field("SIGNATURE",mthd.getSignature());
+   if (lvl > 0) xw.field("LEVEL",lvl);  
+   dumpStackFrameFile(proc,frm,xw);
+   List<BVariable> vars = frm.getVariables();
+   if (vars != null) {
+      for (BVariable lv : vars) {
+         BubjetLog.logD("VISIBLE VARIABLE " + lv);
+         BValue v = frm.getVariableValue(lv);
+         outputValue(proc,v,lv,null,vdepth,arraysz,xw);
+       }
+    }
+   
+   for (String atn : mthd.getArgumentTypeNames()) {
+      xw.begin("ARG");
+      xw.field("TYPE",atn);
+      xw.end("ARG");
+    }
+   xw.end("STACKFRAME");
+}
+
+
+private static String findSourceFile(BubjetDebugProcess proc,Location loc,boolean all)
+{
+   if (loc == null) return null;
+   
+   try {
+      String path = loc.sourcePath();
+      BubjetApplicationService appser = BubjetBundle.getAppService();
+      BubjetProjectManager pm = appser.getProjectManager();
+      return pm.findSourceFile(proc.getProject(),path,all);
+    }
+   catch (AbsentInformationException e) { }
+   
+   return null;
+}
+
+
+
+private static void dumpStackFrameFile(BubjetDebugProcess proc,BStackFrame frm,IvyXmlWriter xw)
+{
+   File fpath = frm.getSourceFile(false);
+   if (fpath == null) {
+      xw.field("FILETYPE","CLASSFILE");
+      String path = frm.getSourcePath();
+      BubjetLog.logD("BINARY PATH " + frm.getFullName() + " " + frm.getLineNumber() + " " +
+            path);
+      xw.field("FILE",path);
+      File p1 = frm.getSourceFile(true);
+      if (p1 == null) {
+         xw.field("FILEPATH",path);
+       }
+      else {
+         xw.field("FILEPATH",p1.getPath());
+       }
+      GlobalSearchScope scp = GlobalSearchScope.allScope(proc.getProject());
+      JavaPsiFacade fac = JavaPsiFacade.getInstance(proc.getProject());
+      PsiClass [] pcls = fac.findClasses(frm.getClassName(),scp);
+      if (pcls.length == 1) {
+         PsiDocumentManager pdm = PsiDocumentManager.getInstance(proc.getProject());
+         Document pdoc = pdm.getDocument(pcls[0].getContainingFile());
+         BMethod m = frm.getMethod();
+         int start = -1;
+         int len = -1;
+         for (PsiMethod pm : pcls[0].getAllMethods()) {
+            if (!m.getName().equals(pm.getName())) continue;
+            TextRange rng = pm.getTextRange();
+            int l0 = pdoc.getLineNumber(rng.getStartOffset());
+            int l1 = pdoc.getLineNumber(rng.getEndOffset());
+            if (frm.getLineNumber() >= l0 && frm.getLineNumber() <= l1) {
+               start = rng.getStartOffset();
+               len = rng.getLength();
+               break;
+             }
+          }
+         if (start > 0) {
+            xw.field("SOURCEOFF",start);
+            xw.field("SOURCELEN",len);
+            xw.bytesElement("SOURCE",pdoc.getText().getBytes());
+          }
+       }
+    }
+   else {
+      xw.field("FILE",fpath.getPath());
+      xw.field("FILETYPE","JAVAFILE");
+    }
+}
+
+
+
+
+
+
+static void outputValue(BubjetDebugProcess proc,BValue v,BVariable var,
+      String name,int lvls,int arraysz,IvyXmlWriter xw)
+{
+  outputValue(proc, v,var,name,lvls,arraysz,null,xw);
+}
+
+
+static void outputValue(BubjetDebugProcess proc,BValue val,BVariable var,
+      String name,int lvls,int arraysz,Set<String> donestatics,IvyXmlWriter xw)
+{
+   if (donestatics == null) donestatics = new HashSet<>();
+   if (val == null) return;
+   
+   BubjetLog.logD("OUTPUT VALUE " + val + " " + val.getClass() + " " + var + " " + lvls + " " + arraysz);
+   
+   if (name == null && var != null) {
+      name = var.toString();
+    }
+   String dtyp = null;
+   String typ = "null";
+   if (val.getValueType() != null) typ = val.getValueType().getName();
+   String txt = val.toString();   
+   boolean lcl = false;
+   boolean stat = false;
+   
+   if (var instanceof BField) {
+      BField jfv = (BField) var;
+      dtyp = jfv.getDeclaringType().getName();
+      stat = jfv.isStatic();
+      name = jfv.getName();
+    }
+   else if (var instanceof BLocal) {
+      BLocal lclv = (BLocal) var;
+      lcl = true;
+      name = lclv.getName();
+    }
+   else if (var instanceof BThis) {
+      name = "this";
+      lcl = true;
+    }
+   if (dtyp != null && donestatics.contains(dtyp) && stat) return;
+   
+   xw.begin("VALUE");
+   try {
+      if (name != null) xw.field("NAME",name);
+      if (dtyp != null) xw.field("DECLTYPE",dtyp);
+      if (lcl) xw.field("LOCAL",true);
+      if (stat) xw.field("STATIC",true);
+      xw.field("TYPE",typ);
+      
+      if (val instanceof BArray) {
+         BArray arr = (BArray) val;
+         int len = arr.getLength();
+         xw.field("KIND","ARRAY");
+         xw.field("LENGTH",len);
+         xw.field("HASVARS",len > 0);
+         int sz = arraysz;
+         if (sz == 0) sz = 100;
+         if (sz < 0) sz = len+1;
+         if (lvls > 0) {
+            int ctr = Math.min(len,sz);
+            for (int i = 0; i < ctr; ++i) {
+               outputValue(proc,arr.getIndexValue(i),null,"[" + i + "]",lvls-1,arraysz,donestatics,xw);
+             }
+          }
+       }
+      else if (val instanceof BPrimitive) {
+         xw.field("KIND","PRIMITIVE");
+       }
+      else if (val instanceof BClass) {
+         BClass cor = (BClass) val;
+         xw.field("KIND","CLASS");
+         xw.field("TYPENAME",cor.getReflectedType().getName());
+       }
+      else if (val instanceof BString) {
+         xw.field("KIND","STRING");
+       }
+      else if (val instanceof BObject) {
+         xw.field("KIND","OBJECT");
+         BObject obj = (BObject) val;
+         List<BField> flds = obj.getValueType().getFields();
+         xw.field("HASVARS",flds.size() > 0);
+         if (lvls > 0) {
+            Map<BField,BValue> fvals = obj.getFieldValues(flds);
+            for (Map.Entry<BField,BValue> ent : fvals.entrySet()) {
+               outputValue(proc,ent.getValue(),ent.getKey(),null,lvls-1,
+                     arraysz,donestatics,xw);
+             }
+            if (dtyp != null) donestatics.add(dtyp);
+          }
+       }
+      if (txt.length() >= MAX_VALUE_SIZE) {
+         txt = txt.substring(0,MAX_VALUE_SIZE) + "...";
+       }
+      xw.cdataElement("DESCRIPTION",txt);
+    }
+   catch (Throwable t) {
+      BubjetLog.logE("Problem outputing value",t);
+    }
+   xw.end("VALUE");
+}
+
+
+
+static void outputEvaluation(BubjetDebugProcess proc,BValue val,String err,String expr,
+      int lvls,int arraysz,IvyXmlWriter xw) 
+{
+   xw.begin("EVAL");
+   if (err != null) {
+      xw.field("STATUS","ERROR");
+      xw.textElement("ERROR",err);
+    }
+   else if (val != null) {
+      xw.field("STATUS","OK");
+      outputValue(proc,val,null,expr,lvls,arraysz,xw);
+    }
+   xw.cdataElement("EXPR",expr);
+   xw.end("EVAL");
+}
+
+
+/********************************************************************************/
+/*                                                                              */
+/*      Handle source files                                                     */
+/*                                                                              */
+/********************************************************************************/
+
+static Collection<VirtualFile> findSourceFiles(Module m,Collection<VirtualFile> rslt) 
+{
+   if (rslt == null) rslt = new LinkedHashSet<>();
+   
+   Set<VirtualFile> excl = new HashSet<>(getExcludeRoots(m));
+   List<VirtualFile> cand = getSourceRoots(m);
+   for (VirtualFile vf3 : cand) {
+      BubjetLog.logD("SOURCE ROOT " + vf3);
+      findSourceFiles(vf3,excl,rslt);
+    }
+   
+   return rslt;
+}
+
+
+
+static Collection<VirtualFile> findSourceFiles(VirtualFile base,Set<VirtualFile> excl,Collection<VirtualFile> rslt)
+{
+   if (rslt == null) rslt = new HashSet<>();
+   
+   if (excl != null && excl.contains(base)) return rslt;
+   
+   if (!base.isValid()) ;
+   else if (base.isDirectory()) {
+      if (isValidDirectory(base)) {
+         for (VirtualFile chld : base.getChildren()) {
+            findSourceFiles(chld,excl,rslt);
+          }
+       }
+    }
+   else if (isValidFile(base)) {
+      rslt.add(base);
+    }
+   
+   return rslt;
+}
+
+
+
+static boolean isValidDirectory(VirtualFile vf)
+{
+   if (vf == null) return false;
+   if (!vf.exists()) return false;
+   if (vf.getChildren().length == 0) return false;
+   if (vf.getName().equals("bBACKUP")) return false;
+   if (vf.getName().startsWith(".")) return false;
+   return true;
+}
+
+
+static boolean isValidFile(VirtualFile vf)
+{
+   if (vf == null) return false;
+   if (!vf.isValid()) return false;
+   if (!vf.exists()) return false;
+   if (vf.getName().equals("bCONTROL")) return false;
+   if (vf.getName().equals("bBUFFERS")) return false;
+   if (vf.getName().startsWith(".")) return false;
+   if (!vf.getExtension().equals("java")) return false;
+   return true;
 }
 
 /********************************************************************************/
@@ -1143,11 +1621,29 @@ static GlobalSearchScope getSearchScope(Module m)
 static GlobalSearchScope getSearchScope(Project p,Module m)
 {
    GlobalSearchScope scp = new JavaFilesSearchScope(p);
+   GlobalSearchScope scp1 = ProjectScope.getContentScope(p);
+   scp = scp.intersectWith(scp1);
+   
    if (m != null) {
-      GlobalSearchScope mscp = GlobalSearchScope.moduleScope(m);
+      GlobalSearchScope mscp = null;
+      for (Module mm : getAssociatedModules(m)) {
+         GlobalSearchScope s1 = GlobalSearchScope.moduleScope(mm);
+         if (mscp == null) mscp = s1;
+         else mscp = mscp.union(s1);
+       }
       scp = scp.intersectWith(mscp);
     }
+   
    return scp;
+}
+
+static GlobalSearchScope getSourceSearchScope(Module m)
+{
+   Collection<VirtualFile> fils = findSourceFiles(m,null);
+   BubjetLog.logD("Source files: " + fils);
+   
+   GlobalSearchScope scp0 = GlobalSearchScope.filesWithoutLibrariesScope(m.getProject(),fils);
+   return scp0;
 }
 
 static String convertWildcardToRegex(String s)
@@ -1289,29 +1785,56 @@ static TextRange getExtendedRange(PsiElement e)
 
 static PsiElement getDefinitionElement(PsiElement e)
 {
+   PsiElement rslt = e;
+   
    for (PsiElement e1 = e; e1 != null; e1 = e1.getParent()) {
-//    BubjetLog.logD("ELT " + e1 + " " + e1.getReference() + " " + e1.getClass());
       PsiReference pr = e1.getReference();
       if (pr != null) {
          PsiElement e0 = pr.resolve();
          if (e0 == null) {
-//          BubjetLog.logD("ELEMENT " + e1 + " REF " + e0 + " not resolved");
             e0 = e1;
           }
-//       else BubjetLog.logD("DEFINITION FOUND " + e0 + " " + e1 + " " + e);
-         return e0;
+         rslt = e0;
+         break;
        }
       else if (e1 instanceof PsiMember || e1 instanceof PsiVariable) {
-//       BubjetLog.logD("FOUND DEFINITION " + e1);
-         return e1;
+         rslt = e1;
+         break;
        }
       else if (e1 instanceof PsiReferenceExpression) {
          if (e1.getParent() instanceof PsiMember) {
-            return e1.getParent();
+            rslt = e1.getParent();
+            break;
           }
        }
       else if (e1 instanceof PsiDocParamRef) {
-         return null;
+         rslt = null;
+         break;
+       }
+    }
+   
+   if (rslt instanceof PsiJavaCodeReferenceElement) {
+      rslt = ((PsiJavaCodeReferenceElement)rslt).getReferenceNameElement();
+    }
+   
+   return rslt;
+}
+
+
+static PsiElement getDefinitionIdentifier(PsiElement e)
+{
+   if (e instanceof PsiNameIdentifierOwner) {
+      return ((PsiNameIdentifierOwner) e).getNameIdentifier();
+    }
+   return e;
+}
+
+
+static PsiElement getContainingElement(PsiElement e) 
+{
+   for (PsiElement e1 = e; e1 != null; e1 = e1.getParent()) {
+      if (e1 instanceof PsiMember || e1 instanceof PsiClass) {
+         return e1;
        }
     }
    
@@ -1320,8 +1843,217 @@ static PsiElement getDefinitionElement(PsiElement e)
 
 
 
+/********************************************************************************/
+/*                                                                              */
+/*      Module management                                                       */
+/*                                                                              */
+/********************************************************************************/
+
+static List<Module> getAllModules(Project p)
+{
+   List<Module> rslt = new ArrayList<>();
+   ModuleManager mm = ModuleManager.getInstance(p);
+   for (Module sm : mm.getModules()) {
+      Module pm = getParentModule(sm); 
+      BubjetLog.logD("ALL MODULES " + sm + " " + pm);
+      if (pm != null && pm == sm) rslt.add(sm);
+    }
+   return rslt;
+}
+   
+static Module findModuleByName(Project p,String nm)
+{
+   ModuleManager mm = ModuleManager.getInstance(p);
+   Module emod = mm.findModuleByName(nm);
+   Module par = getParentModule(emod);
+   return par;
+}
 
 
+static Module findModuleForFile(PsiFile pf)
+{
+   Module m = ModuleUtilCore.findModuleForFile(pf); 
+   Module pm = getParentModule(m);   
+   return pm;
+}
+  
+static Module findModuleForFile(VirtualFile vf,Project p)
+{
+   Module m = ModuleUtilCore.findModuleForFile(vf,p);  
+   if (m == null) {
+      BubjetLog.logD("Module not found for file " + vf + " " + p + " " + p.isOpen() + " " + p.isInitialized());
+    }
+   Module pm = getParentModule(m);
+   return pm;
+}
+
+static List<VirtualFile> getSourceRoots(Module m)
+{
+   List<VirtualFile> rslt = new ArrayList<>();
+   for (Module mm : getAssociatedModules(m)) { 
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      for (VirtualFile vf : mrm.getSourceRoots()) {
+         rslt.add(vf);
+       }
+    }
+   
+   return rslt;
+}
+   
+static List<VirtualFile> getContentRoots(Module m)
+{
+   List<VirtualFile> rslt = new ArrayList<>();
+   for (Module mm : getAssociatedModules(m)) { 
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      for (VirtualFile vf : mrm.getContentRoots()) {
+         rslt.add(vf);
+       }
+    }
+   
+   return rslt;
+}
+   
+
+static List<OrderEntry> getOrderEntries(Module m)
+{
+   List<OrderEntry> rslt = new ArrayList<>();
+   for (Module mm : getAssociatedModules(m)) { 
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      for (OrderEntry vf : mrm.getOrderEntries()) {
+         rslt.add(vf);
+       }
+    }
+   
+   return rslt;
+}
+
+static List<Module> getOrderModules(Module m)
+{
+   List<Module> rslt = new ArrayList<>();
+   for (Module mm : getAssociatedModules(m)) {
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      List<Module> nmods = new ArrayList<>();
+      mrm.orderEntries().forEachModule(mod -> nmods.add(mod));
+      for (Module xm : nmods) {
+         if (!rslt.contains(xm)) rslt.add(xm);
+       }
+    }
+   return rslt;
+}
+
+
+static List<ContentEntry> getContentEntries(Module m)
+{
+   List<ContentEntry> rslt = new ArrayList<>();
+   for (Module mm : getAssociatedModules(m)) {
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      for (ContentEntry ce : mrm.getContentEntries()) {
+         rslt.add(ce);
+       }
+    }
+   return rslt;
+}
+
+static Sdk getSdk(Module m)
+{
+   for (Module mm : getAssociatedModules(m)) {
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      Sdk sdk = mrm.getSdk();
+      if (sdk != null) return sdk;
+    }
+   return null;
+}
+
+
+
+static List<Library> getLibraries(Module m)
+{
+   List<Library> rslt = new ArrayList<>();
+   Set<Library> fnd = new HashSet<>();
+   for (Module mm : getAssociatedModules(m)) {
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      List<Library> nrslt = new ArrayList<>();
+      mrm.orderEntries().forEachLibrary(lib -> nrslt.add(lib));
+      for (Library l : nrslt) {
+         if (fnd.add(l)) {
+            rslt.add(l);
+          }
+       }
+    }
+   return rslt;
+}
+
+
+
+
+static Collection<Module> getDependencies(Module m)
+{
+   Set<Module> rslt = new HashSet<>();
+   for (Module mm : getAssociatedModules(m)) {
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      for (Module dm : mrm.getDependencies()) {
+         Module pdm = getParentModule(dm);
+         if (pdm != m) rslt.add(pdm);
+       }
+    }
+   return rslt;
+}
+
+
+static Collection<Module> getUsedBy(Module m) 
+{
+   ModuleManager mman = ModuleManager.getInstance(m.getProject());
+   Set<Module> rslt = new HashSet<>();
+   for (Module mm : getAssociatedModules(m)) {
+      for (Module dm : mman.getModuleDependentModules(mm)) {
+         Module pdm = getParentModule(dm);
+         if (pdm != m) rslt.add(pdm);
+       }
+    }
+   return rslt;
+}
+static List<VirtualFile> getExcludeRoots(Module m)
+{
+   List<VirtualFile> rslt = new ArrayList<>();
+   for (Module mm : getAssociatedModules(m)) { 
+      ModuleRootManager mrm = ModuleRootManager.getInstance(mm);
+      for (VirtualFile vf : mrm.getExcludeRoots()) {
+         rslt.add(vf);
+       }
+    }
+      
+   return rslt;
+}
+   
+   
+private static List<Module> getAssociatedModules(Module m)
+{
+   if (m == null) return new ArrayList<>();
+   List<Module> rslt = new ArrayList<>();
+   rslt.add(m);
+   String pfx = m.getName() + ".";
+   ModuleManager mm = ModuleManager.getInstance(m.getProject());
+   for (Module sm : mm.getModules()) {
+      if (sm.getName().startsWith(pfx)) rslt.add(sm);
+    }
+   return rslt;
+}
+
+   
+private static Module getParentModule(Module m)
+{
+   if (m == null) return null;
+   String nm = m.getName();
+   int idx = nm.indexOf(".");
+   if (idx < 0) return m;
+   nm = nm.substring(0,idx);
+   ModuleManager mm = ModuleManager.getInstance(m.getProject());
+   Module par = mm.findModuleByName(nm);  
+   if (par == null) {
+      BubjetLog.logD("Can't find module by name " + nm + " from " + m.getName());
+    }
+   return par;
+}
 }       // end of class BubjetUtil
 
 

@@ -182,9 +182,13 @@ private String sendMessageWait(String msg,long delay)
    
    String s = msg;
 // if (s.length() > 50) s = s.substring(0,50);
-   BubjetLog.logD("Send message: " + s);
+   BubjetLog.logD("Send message (" + delay + "): " + s);
    
-   return rply.waitForString(delay);
+   String rslt = rply.waitForString(delay);
+   
+   BubjetLog.logD("Got reply: " + rslt);
+   
+   return rslt;
 }
 
 
@@ -285,22 +289,24 @@ private class MintSetup extends Thread {
       
       if (mint_control != null) return;
       
-      String mintname = System.getProperty("edu.brown.cs.bubbles.MINT");
+      String wsname = work_space.getBasePath();
+      if (wsname.endsWith(File.separator)) wsname = wsname.substring(0,wsname.length()-1);
+      int idx = wsname.lastIndexOf(File.separator);
+      if (idx > 0) wsname = wsname.substring(idx+1);
+      if (wsname == null) wsname = "";
+      else wsname = wsname.replace(" ","_");
+      
+      String mintname = System.getProperty("edu.brown.cs.bubbles.MINT." + wsname);
       if (mintname == null) mintname = System.getProperty("edu.brown.cs.bubbles.mint");
+      if (mintname == null) mintname = System.getProperty("edu.brown.cs.bubbles.MINT");
       if (mintname == null) {
-         String wsname = work_space.getBasePath();
-         if (wsname.endsWith(File.separator)) wsname = wsname.substring(0,wsname.length()-1);
-         int idx = wsname.lastIndexOf(File.separator);
-         if (idx > 0) wsname = wsname.substring(idx+1);
-         if (wsname == null) wsname = "";
-         else wsname = wsname.replace(" ","_");
          mintname = BUBJET_MINT_ID;
          mintname = mintname.replace("@@@",wsname);
        }
       if (mintname == null) mintname = BUBJET_MESSAGE_ID;
       
       MintControl mc = MintControl.create(mintname,MintSyncMode.SINGLE);
-      mc.register("<BUBBLES DO='_VAR_1' LANG='Idea' />",new CommandHandler());
+      mc.register("<BUBBLES DO='_VAR_1' />",new CommandHandler());
       synchronized (BubjetMonitor.this) {
          mint_control = mc;
          BubjetMonitor.this.notifyAll();
@@ -364,10 +370,12 @@ private String handleCommand(String cmd,String proj,Element xml) throws BubjetEx
       case "BUILDPROJECT" :
       case "CREATEPACKAGE" :
       case "FINDPACKAGE" :
+      case "GETALLNAMES" :
+         handleProjectCommands(cmd,ws,proj,xml,xw);
+         break;
       case "PREFERENCES" :
       case "SETPREFERENCES" :
-      case "GETALLNAMES" :
-         handleProjectCommand(cmd,ws,proj,xml,xw);
+         handlePreferenceCommands(cmd,ws,proj,xml,xw);
          break;
       case "FINDDEFINITIONS" :
       case "FINDREFERENCES" :
@@ -402,36 +410,40 @@ private String handleCommand(String cmd,String proj,Element xml) throws BubjetEx
       case "ELIDESET" :
       case "FILEELIDE" :
       case "GETCOMPLETIONS" :
+      case "CREATEPRIVATE" :
+      case "PRIVATEEDIT" :
+      case "REMOVEPRIVATE" :
          handleEditCommands(cmd,ws,proj,xml,xw);
          break;
       case "START" :
       case "DEBUGACTION" :
       case "CONSOLEINPUT" :
+         handleExecutionCommands(cmd,ws,proj,xml,xw);
+         break;
       case "GETSTACKFRAMES" :
       case "VARVAL" :
       case "VARDETAIL" :
       case "EVALUATE" :
-         // handle exec commands
-         break;
-      case "CREATEPRIVATE" :
-      case "PRIVATEEDIT" :
-      case "REMOVEPRIVATE" :
-         // handle private edit commands
+         handleEvaluationCommands(cmd,ws,proj,xml,xw);
          break;
       case "QUICKFIX" :
+         BubjetLog.logE("Not implemented yet: QUICKFIX");
          // handle suggestions
          break;
-      case "MOVEELEMENT" :
-      case "RENAMERESOURCE" :
+      case "MOVEELEMENT" :              // for moving a class only
+      case "RENAMERESOURCE" :           // if rename moves a file
       case "EXTRACTMETHOD" :
       case "FORMATCODE" :
       case "FIXIMPORTS" :
       case "REFACTOR" :
       case "DELETE" :
+      case "RENAME" :
+         BubjetLog.logE("Not implemented yet: " + cmd);
          // handle refactorings
          break;
       case "CALLPATH" :
       case "CREATECLASS" :
+         BubjetLog.logE("Not implemented yet: " + cmd);
          // handle bubbles search commands
          break;
       case "LOGLEVEL" :
@@ -452,7 +464,7 @@ private String handleCommand(String cmd,String proj,Element xml) throws BubjetEx
    String rslt = xw.toString();
    xw.close();
    
-// if (rslt.length() > 102300)
+// if (rslt.length() > 1023)
 //    BubjetLog.logD("Result (" + delta + ") = " + rslt.substring(0,1023) + " ...");
 // else
       BubjetLog.logD("Result (" + delta + ") = " + rslt);
@@ -462,13 +474,13 @@ private String handleCommand(String cmd,String proj,Element xml) throws BubjetEx
 
 
 
-private void handleProjectCommand(String cmd,String ws,String proj,Element xml,IvyXmlWriter xw)
+private void handleProjectCommands(String cmd,String ws,String proj,Element xml,IvyXmlWriter xw)
 {
    BubjetProjectManager pm = app_service.getProjectManager();
    
    switch (cmd) {
       case "PROJECTS" :
-         pm.listProjects(ws,xw);
+         pm.handleListProjects(ws,xw);
          break;
       case "OPENPROJECT" :
          pm.openProject(ws,proj,IvyXml.getAttrBool(xml,"FILES",false),
@@ -478,11 +490,8 @@ private void handleProjectCommand(String cmd,String ws,String proj,Element xml,I
 	       IvyXml.getAttrBool(xml,"IMPORTS",false),
 	       IvyXml.getAttrString(xml,"BACKGROUND"),xw);
          break;
-      case "PREFERENCES" :
-         pm.outputPreferences(ws,proj,xw);
-         break;
       case "BUILDPROJECT" :
-         pm.buildProject(ws,proj,
+         pm.handleBuildProject(ws,proj,
                IvyXml.getAttrBool(xml,"CLEAN"),
                IvyXml.getAttrBool(xml,"FULL"),
                IvyXml.getAttrBool(xml,"REFRESH"),xw); 
@@ -494,16 +503,43 @@ private void handleProjectCommand(String cmd,String ws,String proj,Element xml,I
          pm.createPackage(ws,proj,IvyXml.getAttrString(xml,"NAME"),
                IvyXml.getAttrBool(xml,"FORCE",false),xw);
          break;
-      case "SETPREFERENCES" :
+    
       case "EDITPROJECT" :
       case "CREATEPROJECT" :
       case "IMPORTPROJECT" :
+         BubjetLog.logE("Not implemented yet: " + cmd);
          break;
       case "GETALLNAMES" :
          pm.getAllNames(ws,proj,IvyXml.getAttrString(xml,"BID","*"),
                getSet(xml,"FILE"),
                IvyXml.getAttrString(xml,"BACKGROUND"),xw);
          break;
+    }
+}
+
+
+
+private void handlePreferenceCommands(String cmd,String ws,String proj,Element xml,IvyXmlWriter xw)
+        throws BubjetException
+{
+   BubjetProjectManager pm = app_service.getProjectManager();
+   Project p = pm.findProject(ws);
+   if (p == null) {
+      BubjetLog.logE("Can't find project " + ws);
+    }
+   Module m = pm.findModule(p,proj);
+   
+   BubjetPreferenceManager rm = app_service.getPreferenceManager(p);
+   
+   switch (cmd) {
+      case "PREFERENCES" :
+         rm.handlePreferences(p,m,xw);
+         break;
+      case "SETPREFERENCES" :
+	 Element pxml = IvyXml.getChild(xml,"OPTIONS");
+	 rm.handleSetPreferences(p,m,pxml,xw);
+         break;
+         
     }
 }
 
@@ -547,7 +583,7 @@ private void handleSearchCommands(String cmd,String ws,String proj,Element xml,I
 	       xw);
          break;
       case "PATTERNSEARCH" :
-         sm.handleJavaSearch(p,m,IvyXml.getAttrString(xml,"BID","*"),
+         sm.handlePatternSearch(p,m,IvyXml.getAttrString(xml,"BID","*"),
                IvyXml.getAttrString(xml,"PATTERN"),
 	       IvyXml.getAttrString(xml,"FOR"),
 	       IvyXml.getAttrBool(xml,"DEFS",true),
@@ -598,10 +634,12 @@ private void handleSearchCommands(String cmd,String ws,String proj,Element xml,I
 
 
 private void handleLaunchCommands(String cmd,String ws,String proj,Element xml,IvyXmlWriter xw)
+        throws BubjetException
 {
    BubjetProjectManager pm = app_service.getProjectManager();
    
    Project p = pm.findProject(ws);
+   if (p == null) throw new BubjetException("Project " + ws + " not defined");
    Module m = pm.findModule(p,proj);
    
    BubjetLaunchManager lm = app_service.getLaunchManager(p);
@@ -630,6 +668,94 @@ private void handleLaunchCommands(String cmd,String ws,String proj,Element xml,I
     }
 }
 
+
+private void handleExecutionCommands(String cmd,String ws,String proj,Element xml,IvyXmlWriter xw)
+        throws BubjetException
+{
+   BubjetProjectManager pm = app_service.getProjectManager();
+   
+   Project p = pm.findProject(ws);
+   if (p == null) throw new BubjetException("Project " + ws + " not defined");
+   Module m = pm.findModule(p,proj);
+   
+   BubjetLaunchManager lm = app_service.getLaunchManager(p);
+   BubjetExecutionManager em = app_service.getExecutionManager(p);
+   
+   switch (cmd) {
+      case "START" :
+         em.handleStart(p,m,lm.findLaunch(p,IvyXml.getAttrString(xml,"NAME")),
+	       IvyXml.getAttrString(xml,"MODE","DEBUG"),
+	       IvyXml.getAttrBool(xml,"BUILD",true),
+	       IvyXml.getAttrBool(xml,"REGISTER",true),
+	       IvyXml.getAttrString(xml,"VMARG"),
+	       IvyXml.getAttrString(xml,"ID"),xw);
+         break;
+      case "DEBUGACTION" :
+         em.handleDebugAction(p,m,
+               IvyXml.getAttrString(xml,"LAUNCH"),
+	       IvyXml.getAttrString(xml,"TARGET"),
+	       IvyXml.getAttrString(xml,"PROCESS"),
+	       IvyXml.getAttrString(xml,"THREAD"),
+	       IvyXml.getAttrString(xml,"FRAME"),
+	       IvyXml.getAttrEnum(xml,"ACTION",BubjetDebugAction.NONE),xw);
+         break;
+      case "CONSOLEINPUT" :
+         em.handleConsoleInput(p,m,IvyXml.getAttrString(xml,"LAUNCH"),
+               IvyXml.getTextElement(xml,"INPUT"));
+         break;
+  
+    }
+}
+
+
+private void handleEvaluationCommands(String cmd,String ws,String proj,Element xml,IvyXmlWriter xw)
+        throws BubjetException
+{
+   BubjetProjectManager pm = app_service.getProjectManager();
+   
+   Project p = pm.findProject(ws);
+   if (p == null) throw new BubjetException("Project " + ws + " not defined");
+   Module m = pm.findModule(p,proj);
+   
+   BubjetEvaluationManager em = app_service.getEvaluationManager(p);
+   
+   switch (cmd) {
+      case "GETSTACKFRAMES" :
+         em.handleGetStackFrames(p,m,IvyXml.getAttrString(xml,"LAUNCH"),
+	       IvyXml.getAttrString(xml,"THREAD"),
+	       IvyXml.getAttrInt(xml,"COUNT",-1),
+	       IvyXml.getAttrInt(xml,"DEPTH",0),
+	       IvyXml.getAttrInt(xml,"ARRAY",100),xw);
+         break;
+      case "VARVAL" :
+         em.handleVarVal(p,m,IvyXml.getAttrString(xml,"THREAD"),
+	       IvyXml.getAttrString(xml,"FRAME"),
+	       IvyXml.getTextElement(xml,"VAR"),
+	       IvyXml.getAttrInt(xml,"DEPTH",1),
+	       IvyXml.getAttrInt(xml,"ARRAY",100),xw);
+         break;
+      case "VARDETAIL" :
+         em.handleVarVal(p,m,IvyXml.getAttrString(xml,"THREAD"),
+	       IvyXml.getAttrString(xml,"FRAME"),
+	       IvyXml.getTextElement(xml,"VAR"),-1,
+	       IvyXml.getAttrInt(xml,"ARRAY",100),xw);
+         break;
+      case "EVALUATE" :
+         em.handleEvaluate(p,m,IvyXml.getAttrString(xml,"BID","*"),
+	       IvyXml.getTextElement(xml,"EXPR"),
+	       IvyXml.getAttrString(xml,"THREAD"),
+	       IvyXml.getAttrString(xml,"FRAME"),
+	       IvyXml.getAttrBool(xml,"IMPLICIT",false),
+	       IvyXml.getAttrBool(xml,"BREAK",true),
+	       IvyXml.getAttrString(xml,"REPLYID"),
+	       IvyXml.getAttrInt(xml,"LEVEL"),
+	       IvyXml.getAttrInt(xml,"ARRAY"),
+	       IvyXml.getAttrString(xml,"SAVEID"),
+               IvyXml.getAttrBool(xml,"ALLFRAMES"),xw);
+         break;
+    }
+}
+   
 
 
 private void handleBreakCommands(String cmd,String ws,String proj,Element xml,IvyXmlWriter xw)
@@ -742,6 +868,22 @@ private void handleEditCommands(String cmd,String ws,String proj,Element xml,Ivy
 	       IvyXml.getAttrString(xml,"FILE"),
 	       IvyXml.getAttrInt(xml,"OFFSET"),xw);
          break;
+      case "CREATEPRIVATE" :
+         em.handleCreatePrivate(p,m,IvyXml.getAttrString(xml,"BID","*"),
+	       IvyXml.getAttrString(xml,"PID"),
+	       IvyXml.getAttrString(xml,"FILE"),
+	       IvyXml.getAttrString(xml,"FROMPID"),xw);     
+         break;
+      case "PRIVATEEDIT" :
+         em.handleEditFile(p,m,IvyXml.getAttrString(xml,"PID","*"),
+	       IvyXml.getAttrString(xml,"FILE"),
+	       0,
+	       getEditSet(xml),xw);
+         break;
+      case "REMOVEPRIVATE" :
+         em.handleRemovePrivate(p,m,IvyXml.getAttrString(xml,"PID"),
+	       IvyXml.getAttrString(xml,"FILE"));
+         break;
     }
 } 
 
@@ -781,7 +923,7 @@ private void handleUtilityCommands(String cmd,String ws,String proj,Element xml,
       case "GETPROXY" :
          break;
       case "SAVEWORKSPACE" :
-         p.save();
+         if (p != null) p.save();
          break;
     }
 }

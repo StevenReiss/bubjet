@@ -110,7 +110,7 @@ private class GetRunConfigurationsAction extends BubjetAction.Read {
    
    @Override void process() {
       for (RunnerAndConfigurationSettings rcs : launch_configs) {
-         BubjetUtil.outputLaunch(rcs,xml_writer);
+         BubjetUtil.outputLaunchConfiguration(rcs,xml_writer);
        }
     }
    
@@ -128,7 +128,7 @@ private class GetRunConfigurationsAction extends BubjetAction.Read {
 void getNewRunConfiguration(Project p,Module m,String name,
       String clone,String type,IvyXmlWriter xw)
 {
-   
+   BubjetLog.logE("Not implemented yet: NEWRUNCONFIG");
 }
 
 
@@ -144,6 +144,8 @@ void editRunConfiguration(Project p,Module m,String launch,
 {
    RunnerAndConfigurationSettings rcs = findLaunch(p,launch);
    if (rcs == null) return;
+   BubjetLog.logE("Not implemented yet: EDITRUNCONFIG");
+   
 }
 
 
@@ -158,6 +160,7 @@ void saveRunConfiguration(Project p,Module m,String launch,IvyXmlWriter xw)
 {
    RunnerAndConfigurationSettings rcs = findLaunch(p,launch);
    if (rcs == null) return;
+   BubjetLog.logE("Not implemented yet: SAVERUNCONFIG");
 }
 
 
@@ -172,6 +175,7 @@ void deleteRunConfiguration(Project p,Module m,String launch,IvyXmlWriter xw)
 {
    RunnerAndConfigurationSettings rcs = findLaunch(p,launch);
    if (rcs == null) return;
+   BubjetLog.logE("Delete run configuration not implemented");
    // remove
 }
 
@@ -184,14 +188,22 @@ void deleteRunConfiguration(Project p,Module m,String launch,IvyXmlWriter xw)
 /*                                                                              */
 /********************************************************************************/
 
-private RunnerAndConfigurationSettings findLaunch(Project p,String name)
+RunnerAndConfigurationSettings findLaunch(Project p,String name)
 {
    for (RunnerAndConfigurationSettings rcs : launch_configs) {
-      if (rcs.getName().equals(name)) {
-         RunConfiguration rc = rcs.getConfiguration();
-         if (rc.getName().equals(name) && rc.getProject() == p) return rcs;
+      RunConfiguration rc = rcs.getConfiguration();
+      BubjetLog.logD("CHECK RCS " + rcs.getName() + " " + rcs.getUniqueID() + " " +
+            rc.getName() + " " + rc.getUniqueID());
+      if (p != null && rc.getProject() != p) continue;
+      if (rc.getName().equals(name) ||
+            String.valueOf(rc.getUniqueID()).equals(name) ||
+            rcs.getName().equals(name) || 
+            rcs.getUniqueID().equals(name)) {
+         return rcs;
        }
     }
+   BubjetLog.logD("LAUNCH CONFIGURATION " + name + " NOT FOUND");
+   
    return null;
 }
 
@@ -207,9 +219,11 @@ private void launchEvent(String what,RunnerAndConfigurationSettings ... rcss)
    for (RunnerAndConfigurationSettings rcs : rcss) {
       RunConfiguration rc = rcs.getConfiguration();
       Project p = rc.getProject();
-      IvyXmlWriter xw = app_service.getMonitor(p).beginMessage("LAUNCH");
+      IvyXmlWriter xw = app_service.getMonitor(p).beginMessage("LAUNCHCONFIGEVENT");
+      xw.begin("LAUNCH");
       xw.field("REASON",what);
-      BubjetUtil.outputLaunch(rcs,xw);
+      BubjetUtil.outputLaunchConfiguration(rcs,xw);
+      xw.end("LAUNCH");
       app_service.getMonitor(p).finishMessage(xw);
     }
 }

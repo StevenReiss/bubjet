@@ -26,11 +26,11 @@ import com.intellij.openapi.editor.event.DocumentListener;
 import com.intellij.openapi.editor.impl.ImaginaryEditor;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleUtilCore;
 import com.intellij.openapi.progress.util.ProgressIndicatorBase;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.impl.DiffLog;
 import com.intellij.psi.text.BlockSupport;
@@ -46,6 +46,7 @@ import java.util.Map;
 
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.editor.EditorFactory;
 
 
 class BubjetFileData implements BubjetConstants, DocumentListener
@@ -64,13 +65,16 @@ private Module for_module;
 private String file_name;
 private VirtualFile for_file;
 private PsiFile psi_file;
-private Document default_buffer;
+private Document psi_document;
 private long last_modified;
 private Map<String,PrivateBufferData> buffer_map;
 private Map<String,UserData> buffer_users;
 private String line_separator;
 private String current_bid;
 private BubjetDummyEditor dummy_editor;
+private int start_edit;
+private int end_edit;
+private int edit_delta;
 
 private static final int	DEAD_COUNT = 10;
 
@@ -86,17 +90,23 @@ BubjetFileData(BubjetApplicationService app,Project p,VirtualFile vf)
 {
    app_service = app;
    for_project = p;
-   for_module = ModuleUtilCore.findModuleForFile(vf,for_project);                
    for_file = vf;
    psi_file = BubjetUtil.getPsiFile(for_project,vf);
+   for_module = BubjetUtil.findModuleForFile(vf,for_project);   
+   if (for_module == null) {
+      for_module = BubjetUtil.findModuleForFile(psi_file);
+      BubjetLog.logD("MODULE FOR PSI FILE " + for_module);
+    }  
    buffer_map = new HashMap<>();
    buffer_users = new HashMap<>();
    line_separator = null;
-   default_buffer = FileDocumentManager.getInstance().getDocument(vf);
-   default_buffer.addDocumentListener(this);
-   last_modified = default_buffer.getModificationStamp();
+   psi_document = FileDocumentManager.getInstance().getDocument(vf);
+   psi_document.addDocumentListener(this);
+   last_modified = psi_document.getModificationStamp();
    current_bid = null;
    dummy_editor = new BubjetDummyEditor();
+   start_edit = end_edit = -1;
+   edit_delta = 0;
 }
 
 
@@ -116,8 +126,27 @@ BubjetMonitor getMonitor() {
 
 PsiFile getPsiFile()                    { return psi_file; }
 VirtualFile getVirutalFile()            { return for_file; }
-Document getDocument()                  { return default_buffer; }
+Document getDocument()                  { return psi_document; }
 Editor getEditor()                      { return dummy_editor; }
+
+PsiFile getPsiFile(String bid)
+{
+   if (bid == null) return psi_file;
+   PrivateBufferData pbd = buffer_map.get(bid);
+   if (pbd == null) return psi_file;
+   return pbd.getPsiFile();
+}
+
+
+Document getDocument(String bid) 
+{
+   if (bid == null) return psi_document;
+   PrivateBufferData pbd = buffer_map.get(bid);
+   if (pbd == null) return psi_document;
+   return pbd.getDocument();
+}
+
+
 
 BubjetElider checkElider(String bid) 
 {
@@ -168,22 +197,22 @@ boolean setCurrentId(String bid,int id)
 
 synchronized boolean hasChanged()
 {
-   if (default_buffer == null) return false;
-   BubjetLog.logD("CHECK CHANGED " + default_buffer.getModificationStamp() +
+   if (psi_document == null) return false;
+   BubjetLog.logD("CHECK CHANGED " + psi_document.getModificationStamp() +
          " " + last_modified);
-   return default_buffer.getModificationStamp() > last_modified;
+   return psi_document.getModificationStamp() > last_modified;
 }
 
 
 synchronized String getCurrentContents()
 {
-   return default_buffer.getText();
+   return psi_document.getText();
 }
 
 
 synchronized int getLength()
 {
-   return default_buffer.getTextLength();
+   return psi_document.getTextLength();
 }
 
 String getContents(String bid) 
@@ -200,32 +229,36 @@ String getContents(String bid)
 
 void textEdit(String bid,EditData ed) 
 {
-   if (bid != null && buffer_map.get(bid) != null) {
-      // PrivateBufferData bd = buffer_map.get(bid);
-      // bd.textEdit(ed);
+   Document d = getDocument(bid);
+   boolean chngfg = hasChanged();
+   current_bid = bid;
+   String rep = ed.getText();
+   BubjetLog.logD("TEXT EDIT " + ed.getOffset() + " " + ed.getEndOffset() + " " + rep);
+   if (start_edit < 0 || ed.getOffset() < start_edit) start_edit = ed.getOffset();
+   if (end_edit < 0 || ed.getEndOffset() + edit_delta > end_edit) end_edit = ed.getEndOffset() + edit_delta;
+   if (rep == null) {
+      d.deleteString(ed.getOffset(),ed.getEndOffset());
+      edit_delta -= ed.getEndOffset() - ed.getOffset();
+    }
+   else if (ed.getLength() == 0) {
+      d.insertString(ed.getOffset(),rep);
     }
    else {
-      boolean chngfg = hasChanged();
-      current_bid = bid;
-      String rep = ed.getText();
-      BubjetLog.logD("TEXT EDIT " + ed.getOffset() + " " + ed.getEndOffset() + " " + rep);
-      if (rep == null) {
-         default_buffer.deleteString(ed.getOffset(),ed.getEndOffset());
-       }
-      else if (ed.getLength() == 0) {
-         default_buffer.insertString(ed.getOffset(),rep);
-       }
-      else {
-         default_buffer.replaceString(ed.getOffset(),ed.getEndOffset(),rep);
-       }
-      current_bid = null;
-      if (!chngfg && hasChanged()) {
-         BubjetMonitor bm = app_service.getMonitor(for_project);
-         IvyXmlWriter xw = bm.beginMessage("FILECHANGE");
-         xw.field("FILE",BubjetUtil.outputFileName(for_file));
-         bm.finishMessage(xw);
-       }
-      getUser(bid).noteEdit(ed);
+      d.replaceString(ed.getOffset(),ed.getEndOffset(),rep);
+      edit_delta -= ed.getEndOffset() - ed.getOffset(); 
+      edit_delta += rep.length();
+    }
+   current_bid = null;
+   if (!chngfg && hasChanged() && !isPrivateId(bid)) {
+      BubjetMonitor bm = app_service.getMonitor(for_project);
+      IvyXmlWriter xw = bm.beginMessage("FILECHANGE");
+      xw.field("FILE",BubjetUtil.outputFileName(for_file));
+      bm.finishMessage(xw);
+    }
+   if (!isPrivateId(bid)) getUser(bid).noteEdit(ed);
+   else {
+      PrivateBufferData pbd = buffer_map.get(bid);
+      pbd.update();
     }
 }
 
@@ -244,15 +277,15 @@ void updatePsiFile()
    PsiFile pf = getPsiFile();
    
    String ns = pf.getNode().getText();
-   BubjetLog.logD("CHECK " + pf.getText().length() + " " + default_buffer.getText().length() + " " +
-         ns.length() + " " + 
+   BubjetLog.logD("CHECK " + pf.getText().length() + " " + psi_document.getText().length() + " " +
+         ns.length() + " " + start_edit + " " + end_edit + " " + edit_delta + " " + 
          for_file.getModificationStamp() + " " + 
-         pf.getText().equals(default_buffer.getText()));
+         pf.getText().equals(psi_document.getText()));
    
    TextRange rng = new TextRange(0,ns.length());
    ProgressIndicatorBase pi = new ProgressIndicatorBase();
    try {
-      DiffLog dl = bs.reparseRange(pf,pf.getNode(),rng,default_buffer.getText(),pi,ns);
+      DiffLog dl = bs.reparseRange(pf,pf.getNode(),rng,psi_document.getText(),pi,ns);
       BubjetLog.logD("REPARSE " + dl);
     }
    catch (Throwable t) {
@@ -265,6 +298,19 @@ void updatePsiFile()
 // pdm.commitDocument(default_buffer);
 }
 
+
+
+void refresh()
+{
+   psi_file.getManager().reloadFromDisk(psi_file);
+}
+
+
+void saveFile()
+{
+   PsiDocumentManager pdm = PsiDocumentManager.getInstance(for_project);
+   pdm.commitDocument(psi_document);
+}
 
 
 /********************************************************************************/
@@ -307,6 +353,42 @@ private UserData getUser(String bid)
          buffer_users.put(bid,ud);
        }
       return ud;
+    }
+}
+
+
+
+
+/********************************************************************************/
+/*                                                                              */
+/*      Private buffer methods                                                  */
+/*                                                                              */
+/********************************************************************************/
+
+boolean createPrivateBuffer(String sid,String opid) 
+{
+   PrivateBufferData bd = null;
+   
+   synchronized (buffer_map) {
+      bd = buffer_map.get(sid);
+      if (bd != null) return false;
+      BubjetLog.logD("Create private buffer " + sid);
+      bd = new PrivateBufferData(sid,psi_document);
+      buffer_map.put(sid,bd);
+    }
+   
+   PrivateBufferUpdateAction upd = new PrivateBufferUpdateAction(bd);
+   upd.start();
+   
+   return true;
+}
+
+void removePrivateBuffer(String bid)
+{
+   BubjetLog.logD("Remove private buffer " + bid);
+   synchronized (buffer_map) {
+      PrivateBufferData bd = buffer_map.remove(bid);
+      if (bd != null) bd.free();
     }
 }
 
@@ -443,7 +525,75 @@ private class UserData {
 
 private class PrivateBufferData {
    
+   private String buffer_id;
+   private Document our_document;
+   private PsiFile our_psifile;
+   
+   PrivateBufferData(String bid,Document d) {
+      buffer_id = bid;
+      EditorFactory ef = EditorFactory.getInstance();
+      our_document = ef.createDocument(d.getCharsSequence());
+      our_psifile = null;
+    }
+   
+   synchronized PsiFile getPsiFile() {
+      while (psi_file == null) {
+          try {
+             wait(1000);
+           }
+          catch (InterruptedException e) { }
+       }
+      return psi_file;
+    }
+   
+   Document getDocument()                               { return our_document; }
+   
+   void free() {
+      our_document = null;
+      our_psifile = null;
+    }
+   
+   void update() {
+      BlockSupport bs = BlockSupport.getInstance(for_project);
+      PsiDocumentManager pdm = PsiDocumentManager.getInstance(for_project);
+      if (our_psifile == null) {
+         our_psifile = pdm.getPsiFile(our_document);
+       }
+      else {
+         String ns = our_psifile.getNode().getText();
+         TextRange rng = new TextRange(0,ns.length());
+         ProgressIndicatorBase pi = new ProgressIndicatorBase();
+         try {
+            DiffLog dl = bs.reparseRange(our_psifile,our_psifile.getNode(),rng,
+                  our_psifile.getText(),pi,ns);
+            BubjetLog.logD("REPARSE " + dl);
+          }
+         catch (Throwable t) {
+            BubjetLog.logE("REPARSE FAILED",t);
+          }       
+       }
+      BubjetErrorPass ep = new BubjetErrorPass(BubjetFileData.this,buffer_id,0,null);
+      ep.process();
+    }
+   
 }       // end of inner class PrivateBufferData
+
+
+
+private class PrivateBufferUpdateAction extends BubjetAction.BackgroundRead {
+   
+   private PrivateBufferData private_buffer;
+   
+   PrivateBufferUpdateAction(PrivateBufferData pd) {
+      super(for_project,null);
+      private_buffer = pd;
+    }
+   
+   @Override void process() {
+      private_buffer.update();
+    }
+}
+
 
 
 /********************************************************************************/
@@ -457,7 +607,7 @@ private class BubjetDummyEditor extends ImaginaryEditor {
    private static final long serialVersionUID = 1;
   
    BubjetDummyEditor() {
-      super(for_project,default_buffer);
+      super(for_project,psi_document);
     }
    
    @Override public boolean isViewer()          { return false; }

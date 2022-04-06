@@ -9,10 +9,12 @@
     <depends>com.intellij.modules.xdebugger</depends>
     <depends>com.intellij.java</depends>
     <depends>com.intellij.modules.java</depends>
+    <depends>JUnit</depends>
 
     <extensions defaultExtensionNs="com.intellij">
 	<applicationService serviceImplementation="edu.brown.cs.bubbles.bubjet.BubjetApplicationService"/>
 	<projectService serviceImplementation="edu.brown.cs.bubbles.bubjet.BubjetProjectService"/>
+	<projectService serviceImplementation="edu.brown.cs.bubbles.bubjet.BubjetSettings" />
     </extensions>
 
     <applicationListeners>
@@ -49,16 +51,15 @@
     </applicationListeners>
 
     <projectListeners>
-       <listener class="edu.brown.cs.bubbles.bubjet.BubjetToolWindowListener"
-		 topic="com.intellij.openapi.wm.ex.ToolWindowManagerListener" />
-       <listener class="edu.brown.cs.bubbles.bubjet.BubjetExecutionListener"
-		 topic="com.intellij.execution.ExecutionListener" />
-	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProjectTaskListener"
-		  topic="com.intellij.task.ProjectTaskListener" />
-
+<!--   <listener class="edu.brown.cs.bubbles.bubjet.BubjetToolWindowListener"
+		 topic="com.intellij.openapi.wm.ex.ToolWindowManagerListener" />        -->
+<!--   <listener class="edu.brown.cs.bubbles.bubjet.BubjetExecutionListener"
+		 topic="com.intellij.execution.ExecutionListener" />                    -->
+<!--	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProjectTaskListener"
+		  topic="com.intellij.task.ProjectTaskListener" />                      -->
 <!--	<listener class="edu.brown.cs.bubbles.bubjet.BubjetCompilationStatusListener"
-		  topic="com.intellij.openapi.compiler.CompilationStatusListener" />
-	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProblemListener"
+		  topic="com.intellij.openapi.compiler.CompilationStatusListener" />    -->
+<!--	<listener class="edu.brown.cs.bubbles.bubjet.BubjetProblemListener"
 		  topic="com.intellij.problems.ProblemListener" />     -->
     </projectListeners>
 

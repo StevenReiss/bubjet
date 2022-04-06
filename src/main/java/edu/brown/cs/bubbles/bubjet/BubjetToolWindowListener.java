@@ -24,6 +24,7 @@ package edu.brown.cs.bubbles.bubjet;
 
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener;
 import com.intellij.openapi.wm.ToolWindowManager;
+import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.ToolWindow;
 
 import java.util.List;
@@ -34,31 +35,44 @@ public class BubjetToolWindowListener implements ToolWindowManagerListener
 
 /********************************************************************************/
 /*                                                                              */
+/*      Constructors                                                            */
+/*                                                                              */
+/********************************************************************************/
+
+BubjetToolWindowListener(Project p)
+{ 
+}
+
+
+
+/********************************************************************************/
+/*                                                                              */
 /*      Abstract Method Implementations                                         */
 /*                                                                              */
 /********************************************************************************/
 
 @Override public void toolWindowsRegistered(List<String> ids,ToolWindowManager wm)
 {
-   BubjetLog.logD("toolWindowsRegistered " + ids);
+   BubjetLog.logD("TOOL toolWindowsRegistered " + ids + " " + wm + " " +
+        wm.getLastActiveToolWindowId());
 }
 
 
 @Override public void toolWindowUnregistered(String id,ToolWindow win)
 {
-   BubjetLog.logD("toolWindowUnregistgered " + id);
+   BubjetLog.logD("TOOL toolWindowUnregistgered " + id + " " + win.getTitle());
 }
 
 
 @Override public void stateChanged(ToolWindowManager wm)
 {
-   BubjetLog.logD("stateChanged window mangager");
+   BubjetLog.logD("TOOL stateChanged window mangager " + wm);
 }
 
 
 @Override public void toolWindowShown(ToolWindow win)
 {
-   BubjetLog.logD("toolWindowShown " + win.getTitle());
+   BubjetLog.logD("TOOL toolWindowShown " + win.getTitle());
 }
 
 

@@ -64,15 +64,16 @@ private static final long serialVersionUID = 1;
 
 BubjetProgressIndicator(String id,Project p)
 {
+   setIndeterminate(false);
    for_project = p;
-   if (getText() == null) setText(id);
+   if (getText() == null || getText().length() == 0) setText(id);
    cur_fraction = 0;
    
    installToProgress(this);  
    
    task_id = Integer.toString(task_counter.incrementAndGet());
    
-   BubjetLog.logD("Progress monitor " + id + " " + task_id);
+   BubjetLog.logD("Progress monitor " + id + " " + task_id + " " + getText());
    
    makeReport("BEGIN");
 }
@@ -101,6 +102,7 @@ BubjetProgressIndicator(String id,Project p)
 
 public void onFractionChanged(double f)
 { 
+   BubjetLog.logD("Progress fraction " + f + " " + getFraction());
    cur_fraction = f;
    makeReport("WORKED");
 }
@@ -114,16 +116,22 @@ public void onFractionChanged(double f)
 
 private void makeReport(String typ)
 {
-   BubjetLog.logD("MAKE PROGRESS REPORT " + typ + " " + cur_fraction);
+   BubjetLog.logD("MAKE PROGRESS REPORT " + typ + " " + cur_fraction + " " + getFraction() +
+      " " + getText() + " " + getText2());
    BubjetMonitor mon = BubjetBundle.getMonitor(for_project);
    IvyXmlWriter xw = mon.beginMessage("PROGRESS");
    xw.field("KIND",typ);
    xw.field("TASK",getText());
-   if (getText2() != null) xw.field("SUBTASK",getText2());
+   if (getText2() != null && getText2().length() > 0) {
+      xw.field("SUBTASK",getText2());
+    }
    xw.field("ID",task_id);
    xw.field("S",serial_number.incrementAndGet());
    if (cur_fraction > 0) {
       xw.field("WORK",((int) cur_fraction*100)); 
+    }
+   else if (getFraction() > 0) {
+      xw.field("WORK",((int) getFraction() * 100));
     }
    mon.finishMessage(xw);
 }

@@ -35,6 +35,8 @@
 
 package edu.brown.cs.bubbles.bubjet;
 
+import edu.brown.cs.bubbles.bubjet.BubjetDebug.BValue;
+
 public interface BubjetConstants
 {
 
@@ -81,6 +83,47 @@ interface EditData {
    default int getEndOffset()           { return getOffset() + getLength(); }
    
 }	// end of inner interface EditData
+
+
+enum UpdateType { INITIAL, RECHECK, CHECK };
+
+
+
+/********************************************************************************/
+/*                                                                              */
+/*      Debugger definitions                                                    */
+/*                                                                              */
+/********************************************************************************/
+
+enum BubjetDebugAction {
+   NONE,
+   TERMINATE,
+   RESUME,
+   STEP_INTO,
+   STEP_OVER,
+   STEP_RETURN,
+   SUSPEND,
+   DROP_TO_FRAME
+}
+
+
+int MAX_VALUE_SIZE = 40960;
+
+
+
+interface EvalCallback {
+   
+   void evaluated(BValue result);
+   void evaluationError(String msg);
+   
+}
+
+enum BubjetOutputType {
+   SYSTEM,
+   STDOUT,
+   STDERR
+}
+
 
 
 }       // end of interface BubjetConstants

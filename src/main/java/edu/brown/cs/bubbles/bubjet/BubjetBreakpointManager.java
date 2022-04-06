@@ -159,8 +159,11 @@ private class AddLineBreakpointAction extends BubjetAction.WriteDispatch {
       JavaLineBreakpointType type = util.findBreakpointType(JavaLineBreakpointType.class);
       XDebuggerManager xdm = XDebuggerManager.getInstance(for_project);
       XBreakpointManager xbm = xdm.getBreakpointManager();
+      int lno = line_number-1;
       
-      XLineBreakpoint<?> bp = xbm.addLineBreakpoint(type,for_file.getUrl(),line_number,null,false);
+      JavaLineBreakpointProperties props = type.createBreakpointProperties(for_file,lno);
+      
+      XLineBreakpoint<?> bp = xbm.addLineBreakpoint(type,for_file.getUrl(),lno,props,false);
       bp.setSuspendPolicy(suspend_policy);
       if (suspend_policy == SuspendPolicy.NONE) {
          bp.setLogMessage(true);
@@ -308,14 +311,32 @@ private class ClearLineBreakpointAction extends BubjetAction.WriteDispatch {
 
 private void sendBreakpointEvent(String what,XBreakpoint<?> bpt)
 {
-   BubjetMonitor bm = app_service.getMonitor(for_project);
-   IvyXmlWriter xw = bm.beginMessage("BREAKEVENT");
-   xw.begin("BREAKPOINTS");
-   xw.field("REASON",what);
-   BubjetUtil.outputBreakpoint(for_project,bpt,xw);
-   xw.end("BREAKPOINTS");
-   bm.finishMessage(xw);
+   BreakEventSendAction act = new BreakEventSendAction(what,bpt);
+   act.start();
 }
+
+
+private class BreakEventSendAction extends BubjetAction.Read {
+   
+   private String event_type;
+   private XBreakpoint<?> break_point;
+   
+   BreakEventSendAction(String what,XBreakpoint<?> bp) {
+      event_type = what;
+      break_point = bp;
+    }
+   
+   @Override public void process() {
+      BubjetMonitor bm = app_service.getMonitor(for_project);
+      IvyXmlWriter xw = bm.beginMessage("BREAKEVENT");
+      xw.begin("BREAKPOINTS");
+      xw.field("REASON",event_type);
+      BubjetUtil.outputBreakpoint(for_project,break_point,xw);
+      xw.end("BREAKPOINTS");
+      bm.finishMessage(xw);
+    }
+   
+}       // end of inner class BreakEventSendAction
 
 
 

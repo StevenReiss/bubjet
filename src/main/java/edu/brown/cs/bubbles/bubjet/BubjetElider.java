@@ -29,12 +29,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Stack;
 
+import com.intellij.lang.jvm.JvmParameter;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.psi.JavaRecursiveElementVisitor;
 import com.intellij.psi.JavaTokenType;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationParameterList;
 import com.intellij.psi.PsiBlockStatement;
+import com.intellij.psi.PsiCall;
+import com.intellij.psi.PsiCallExpression;
 import com.intellij.psi.PsiCatchSection;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassInitializer;
@@ -72,6 +75,7 @@ import com.intellij.psi.PsiTypeParameterList;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.PsiWhiteSpace;
 import com.intellij.psi.javadoc.PsiDocComment;
+import com.intellij.psi.util.ClassUtil;
 
 import edu.brown.cs.ivy.xml.IvyXmlWriter;
 
@@ -412,6 +416,13 @@ private String getNodeType(PsiElement e)
    else if (e instanceof PsiImportStatement) {
       typ = "IMPORT";
     }
+   else if (e instanceof PsiCallExpression) {
+      typ = "CALL";
+      PsiElement p = e.getParent();
+      if (p instanceof PsiExpression) ;
+      else if (p instanceof PsiType) ;
+      else typ = "CALLEXPR";   
+    }
    else if (e instanceof PsiExpression) {
       PsiElement p = e.getParent();
       if (p instanceof PsiExpression) ;
@@ -423,6 +434,41 @@ private String getNodeType(PsiElement e)
    
    return typ;
 }
+
+
+
+/********************************************************************************/
+/*                                                                              */
+/*      Output information for hints                                            */
+/*                                                                              */
+/********************************************************************************/
+
+private void outputHintData(PsiElement n,IvyXmlWriter xw)
+{
+   PsiMethod mthd = null;
+   if (n instanceof PsiCall) {
+      mthd = ((PsiCall) n).resolveMethod();
+    }
+   
+   if (mthd != null) {
+      xw.begin("HINT");
+      xw.field("KIND","METHOD");
+      if (mthd.isConstructor()) xw.field("CONSTRUCTOR",true);
+      if (mthd.getReturnType() != null) {
+         String rettyp = ClassUtil.getBinaryPresentation(mthd.getReturnType());
+         xw.field("RETURNS",rettyp);
+       }
+      xw.field("NUMPARAM",mthd.getParameters().length);
+      for (JvmParameter pp : mthd.getParameters()) {
+         xw.begin("PARAMETER");
+         xw.field("NAME",pp.getName());
+         BubjetLog.logD("PARAMETER " + pp.getName() + " " + pp.getType());
+         xw.end("PARAMETER");
+       }
+      xw.end("HINT");
+    }
+}
+
 
 
 
@@ -559,6 +605,7 @@ private class ElidePass2 extends JavaRecursiveElementVisitor {
       if (chld) super.visitElement(e);
       if (active_node == e) active_node = null;
       if (finish) {
+         outputHintData(e,xml_writer);
          xml_writer.end("ELIDE");
        }
       checkEndSwitchBlock(e);

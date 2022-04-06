@@ -47,7 +47,6 @@ public BubjetDebugSessionListener()
 /*                                                                              */
 /********************************************************************************/
 
-
 @Override public void sessionPaused()
 {
    BubjetLog.logD("sessionPaused");

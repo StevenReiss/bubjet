@@ -15,6 +15,8 @@ import com.intellij.openapi.compiler.CompilationStatusListener;
 import com.intellij.openapi.compiler.CompileContext;
 import com.intellij.openapi.compiler.CompilerMessage;
 import com.intellij.openapi.compiler.CompilerMessageCategory;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.impl.CoreProgressManager;
 import com.intellij.openapi.project.Project;
 
 import edu.brown.cs.ivy.xml.IvyXmlWriter;
@@ -98,6 +100,16 @@ BubjetCompilationStatusListener(Project project)
 @Override public void onEvent(Object bid,BuildEvent evt)
 {
    BubjetLog.logD("BUILD EVENT " + bid + " " + evt);
+
+   ProgressIndicator pi = CoreProgressManager.getInstance().getProgressIndicator();
+   if (pi == null) pi = CoreProgressManager.getGlobalProgressIndicator();
+   if (pi != null) {
+      BubjetLog.logD("BUILD PROGRESS " + pi.getFraction() + " " +
+            pi.getText() + " " + pi.getText2());
+    }
+   else {
+       BubjetLog.logD("BUILD NO PROGRESS");
+    }
 }
 
 

@@ -28,14 +28,14 @@ import com.intellij.openapi.editor.event.EditorFactoryListener;
 import com.intellij.openapi.fileEditor.FileEditor;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.module.Module;
+import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.packageDependencies.ForwardDependenciesBuilder;
 import com.intellij.patterns.ElementPattern;
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiErrorElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
-import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.LightVirtualFile;
 
 import edu.brown.cs.ivy.xml.IvyXml;
@@ -45,16 +45,21 @@ import com.intellij.openapi.editor.event.DocumentEvent;
 
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import javax.swing.Icon;
 
 import org.w3c.dom.Element;
 
+import com.intellij.analysis.AnalysisScope;
 import com.intellij.codeInsight.completion.BatchConsumer;
-import com.intellij.codeInsight.completion.CompletionContributor;
 import com.intellij.codeInsight.completion.CompletionInitializationContext;
 import com.intellij.codeInsight.completion.CompletionInitializationUtil;
 import com.intellij.codeInsight.completion.CompletionParameters;
@@ -71,6 +76,7 @@ import com.intellij.codeInsight.lookup.Lookup;
 import com.intellij.codeInsight.lookup.LookupElement;
 import com.intellij.ide.highlighter.JavaFileType;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.compiler.CompileContext;
 import com.intellij.openapi.compiler.CompileStatusNotification;
 // import com.intellij.openapi.compiler.CompilerManager;
@@ -96,13 +102,15 @@ private BubjetApplicationService app_service;
 private Project for_project;
 private Map<String,ParamSettings> param_map;
 private Map<VirtualFile,BubjetFileData> file_map;
+private ForwardDependenciesBuilder depend_builder;
+private Map<PsiFile,UpdateType> analysis_queue;
+private Set<PsiFile> active_files;
 
 private static boolean open_editor = false;
 private static boolean alt_complete = true;
 private static CompletionType completion_type = CompletionType.BASIC;
 
 
-// private Object compiler_lock;
 
 // private static boolean edit_compile = true;
 
@@ -126,7 +134,29 @@ BubjetEditManager(BubjetApplicationService app,Project p)
    efac.getEventMulticaster().addDocumentListener(this,p);
    efac.addEditorFactoryListener(this,p);
    
-// compiler_lock = new Object();
+   BuildDependencies bdact = new BuildDependencies();
+   bdact.start();
+   
+   analysis_queue = new LinkedHashMap<>();
+   active_files = new HashSet<>();
+   
+   AnalysisThread at = new AnalysisThread(true);
+   at.start();
+}
+
+
+private class BuildDependencies extends BubjetAction.SmartBackgroundRead {
+   
+   BuildDependencies() {
+      super(for_project,null);
+    }
+   
+   @Override void process() {
+      ForwardDependenciesBuilder fdb = new ForwardDependenciesBuilder(for_project,
+            new AnalysisScope(for_project),1);
+      fdb.analyze();
+      depend_builder = fdb;
+    }
 }
 
 
@@ -217,7 +247,7 @@ private class StartFileAction extends BubjetAction.Command {
     }
          
    @Override void process() throws BubjetException {
-      BubjetFileData fd = findFile(for_module,for_file,bubbles_id);
+      BubjetFileData fd = findFile(for_file,bubbles_id);
       if (fd == null) {
          throw new BubjetException("Compilation unit for file " + for_file + " not available in " + for_module);
        }
@@ -310,7 +340,7 @@ void handleEditFile(Project p,Module m,String bid,String file,int id,
    throws BubjetException
 {
    VirtualFile vf = BubjetUtil.getVirtualFile(file);
-   BubjetFileData fd = findFile(m,vf,bid);
+   BubjetFileData fd = findFile(vf,bid);
    if (fd == null) throw new BubjetException("File " + file + " not available");
    fd.setCurrentId(bid,id);
    
@@ -322,7 +352,7 @@ void handleEditFile(Project p,Module m,String bid,String file,int id,
 private class EditFileAction extends BubjetAction.Command {
    
    private BubjetFileData file_data;
-   private String bubbles_id;
+   private String buffer_id;
    private int edit_id;
    private List<EditData> edit_list;
    private IvyXmlWriter xml_writer;
@@ -331,17 +361,21 @@ private class EditFileAction extends BubjetAction.Command {
          List<EditData> edits,IvyXmlWriter xw) {
       super(p,"TextEdit",fd.getDocument());
       file_data = fd;
-      bubbles_id = bid;
+      buffer_id = bid;
       edit_id = id;
       edit_list = edits;
       xml_writer = xw;
     }
    
    @Override void process() throws BubjetException {
-      for (EditData eds : edit_list) {
-         file_data.textEdit(bubbles_id,eds);
+      synchronized (analysis_queue) {
+         active_files.add(file_data.getPsiFile(buffer_id));
+         analysis_queue.remove(file_data.getPsiFile(buffer_id));
        }
-      PostEditAction pea = new PostEditAction(file_data,bubbles_id,edit_id);
+      for (EditData eds : edit_list) {
+         file_data.textEdit(buffer_id,eds);
+       }
+      PostEditAction pea = new PostEditAction(file_data,buffer_id,edit_id);
       pea.start();
       
       xml_writer.emptyElement("SUCCESS");
@@ -403,17 +437,23 @@ private class PostEditAction extends BubjetAction.BackgroundRead implements Comp
 //        }
 //     }
       
-      
 //    CommitAction cma = new CommitAction(file_data,null);
 //    cma.start();
+      
       file_data.updatePsiFile();
+      if (depend_builder != null) {
+         Set<PsiFile> dep = depend_builder.getDependencies().get(file_data.getPsiFile());
+         addToQueue(dep,UpdateType.RECHECK);
+       }
       
       if (!file_data.isCurrent(bubbles_id,edit_id)) return;
       outputElision();
       
       if (!file_data.isCurrent(bubbles_id,edit_id)) return;
-      BubjetErrorPass ep = new BubjetErrorPass(file_data,bubbles_id,edit_id);
+      BubjetErrorPass ep = new BubjetErrorPass(file_data,bubbles_id,edit_id,null);
       ep.process();
+      
+      removeFromQueue(file_data.getPsiFile());
       
       BubjetLog.logD("POST EDIT DONE");
     }
@@ -447,22 +487,22 @@ private class PostEditAction extends BubjetAction.BackgroundRead implements Comp
       app_service.getMonitor(for_project).finishMessage(xw);
     }
    
-   private void outputPsiErrors() {
-      String what = (file_data.isPrivateId(bubbles_id) ? "PRIVATEERROR" : "FILEERROR");
-      IvyXmlWriter xw = app_service.getMonitor(for_project).beginMessage(what);
-      xw.field("FILE",BubjetUtil.outputFileName(file_data.getVirutalFile()));
-      xw.field("PROJECT",file_data.getModule().getName());
-      xw.begin("MESSAGES");
-      PsiFile pf = file_data.getPsiFile();
-      for (PsiErrorElement err : PsiTreeUtil.collectElementsOfType(pf,PsiErrorElement.class)) {
-         BubjetLog.logD("FOUND ERROR ELEMENT: " + err + " " + err.getContainingFile() + " " +
-               err.getTextRange() + " " + err.getParent() + " " + err.getParent().getTextRange() + " " +
-               err.getChildren().length + " " + err.getErrorDescription());
-         BubjetUtil.outputProblem(for_project,file_data.getDocument(),err,xw);
-       }
-      xw.end("MESSAGES");
-      app_service.getMonitor(for_project).finishMessage(xw);
-    }
+   // private void outputPsiErrors() {
+   // String what = (file_data.isPrivateId(bubbles_id) ? "PRIVATEERROR" : "FILEERROR");
+   // IvyXmlWriter xw = app_service.getMonitor(for_project).beginMessage(what);
+   // xw.field("FILE",BubjetUtil.outputFileName(file_data.getVirutalFile()));
+   // xw.field("PROJECT",file_data.getModule().getName());
+   // xw.begin("MESSAGES");
+   // PsiFile pf = file_data.getPsiFile();
+   // for (PsiErrorElement err : PsiTreeUtil.collectElementsOfType(pf,PsiErrorElement.class)) {
+   //    BubjetLog.logD("FOUND ERROR ELEMENT: " + err + " " + err.getContainingFile() + " " +
+   //          err.getTextRange() + " " + err.getParent() + " " + err.getParent().getTextRange() + " " +
+   //          err.getChildren().length + " " + err.getErrorDescription());
+   //    BubjetUtil.outputProblem(for_project,file_data.getDocument(),err,xw);
+   //  }
+   // xw.end("MESSAGES");
+   // app_service.getMonitor(for_project).finishMessage(xw);
+   //  }
    
    private void outputElision() {
       if (!file_data.isCurrent(bubbles_id,edit_id)) return;
@@ -488,24 +528,7 @@ private class PostEditAction extends BubjetAction.BackgroundRead implements Comp
 
 
 
-private class CommitAction extends BubjetAction.WriteDispatch {
-   
-   private BubjetFileData file_data;
-   private BubjetAction follow_up;
-   
-   CommitAction(BubjetFileData fd,BubjetAction fol) {
-      file_data = fd;
-      follow_up = fol;
-    } 
-   
-   @Override void process() {
-      BubjetLog.logD("UPDATE PSI FILE");
-      file_data.updatePsiFile();
-      BubjetLog.logD("UPDATE COMPLETE");
-      if (follow_up != null) follow_up.start();
-    }
-   
-}       // end of inner class CommitAction
+
 
 
 /********************************************************************************/
@@ -517,8 +540,52 @@ private class CommitAction extends BubjetAction.WriteDispatch {
 void handleCommit(Project p,Module m,String bid,boolean refresh,boolean save,
       boolean compile,Collection<Element> files,IvyXmlWriter xw)
 {
-   
+   CommitAction act = new CommitAction(p,m,bid,refresh,save,compile,files,xw);
+   act.start();
 }
+
+
+
+private class CommitAction extends BubjetAction.WriteDispatch {
+   
+   private boolean do_refresh;
+   private boolean do_save;
+   private boolean do_compile;
+   
+   CommitAction(Project p,Module m,String bid,boolean refresh,boolean save,
+         boolean compile,Collection<Element> files,IvyXmlWriter xw) {
+      do_refresh = refresh;
+      do_save = save;   
+      do_compile = compile;
+    } 
+   
+   @Override void process() {
+      if (do_refresh) {
+         for (BubjetFileData bfd : file_map.values()) {
+            bfd.refresh();
+          }
+       }
+      if (do_save) {
+         for (BubjetFileData bfd : file_map.values()) {
+            bfd.saveFile();
+          }
+       }
+      if (do_compile) {
+         BubjetLog.logD("COMMIT COMPILE " + depend_builder);
+         Set<PsiFile> comp = new LinkedHashSet<>();
+         for (BubjetFileData bfd : file_map.values()) {
+            bfd.updatePsiFile();
+            comp.add(bfd.getPsiFile());
+            if (depend_builder != null) {
+               Set<PsiFile> dep = depend_builder.getDependencies().get(bfd.getPsiFile());
+               comp.addAll(dep);
+             }
+          }
+         addToQueue(comp,UpdateType.RECHECK);
+       }
+    }
+   
+}       // end of inner class CommitAction
 
 
 
@@ -532,7 +599,7 @@ void handleElideSet(Project p,Module m,String bid,String file,boolean compute,
         List<Element> regions,IvyXmlWriter xw) throws BubjetException
 {
    VirtualFile vf = BubjetUtil.getVirtualFile(file);
-   BubjetFileData fd = findFile(m,vf,bid);
+   BubjetFileData fd = findFile(vf,bid);
    if (fd == null) throw new BubjetException("File " + file + " not available");
    BubjetElider be = null;
    if (regions != null) {
@@ -561,7 +628,7 @@ void handleElideSet(Project p,Module m,String bid,String file,boolean compute,
 }
 
 
-private class ElideSetAction extends BubjetAction.Read {
+private class ElideSetAction extends BubjetAction.SmartRead {
   
    private Project for_project;
    private VirtualFile for_file;
@@ -569,6 +636,7 @@ private class ElideSetAction extends BubjetAction.Read {
    private IvyXmlWriter xml_writer;
    
    ElideSetAction(Project p,VirtualFile vf,BubjetElider be,IvyXmlWriter xw) {
+      super(p,null);
       for_project = p;
       for_file = vf;
       use_elider = be;
@@ -610,7 +678,7 @@ void handleGetCompletions(Project p,Module m,String bid,String file,int offset,
       IvyXmlWriter xw)
 {
    VirtualFile vf = BubjetUtil.getVirtualFile(file);
-   BubjetFileData fd = findFile(m,vf,bid);
+   BubjetFileData fd = findFile(vf,bid);
    if (alt_complete) {
       AltGetCompletionsAction act = new AltGetCompletionsAction(fd,offset,bid,xw);
       act.start();
@@ -639,7 +707,6 @@ private class GetCompletionsAction extends BubjetAction.Read {
       Editor ed = file_data.getEditor();
       Caret caret = ed.getCaretModel().getCurrentCaret();
       caret.setSelection(use_offset,use_offset);
-      List<CompletionContributor> contribs = CompletionContributor.forLanguage(pf.getLanguage());
       
       CompletionInitializationContext ctx = new CompletionInitializationContext(ed,caret,pf.getLanguage(),
             pf,CompletionType.BASIC,1);
@@ -707,12 +774,9 @@ private class AltGetCompletionsAction extends BubjetAction.WriteDispatch {
       OffsetsInFile hostoff = CompletionInitializationUtil.insertDummyIdentifier(ctx,proc).get();
       BubjetLog.logD("HOST OFFSETS " + hostoff.getFile() + " " + pf + " " + (pf == hostoff.getFile()) +
          " " + hostoff.getOffsets());
-      CompletionInitializationContext ctx2 = new CompletionInitializationContext(ed,caret,pf.getLanguage(),
-            hostoff.getFile(),completion_type,1);  
       CompletionParameters p2 = CompletionInitializationUtil.createCompletionParameters(ctx,proc,hostoff);
-      CompletionParameters p3 = CompletionInitializationUtil.createCompletionParameters(ctx2,proc,hostoff);
       
-      xml_writer.begin("COMPLETIONS");
+      xml_writer.begin("COMPLETIONS"); 
       try {
          CompletionService service = CompletionService.getCompletionService();
          BubjetLog.logD("P2");
@@ -799,7 +863,8 @@ private class BubjetCompletionProcess implements CompletionProcessEx {
     }
    
    @Override public void addWatchedPrefix(int start,ElementPattern<String> cond) {
-      BubjetLog.logD("ADD WATCHED PREFIX " + start + " " + cond);
+      BubjetLog.logD("ADD WATCHED PREFIX " + start + " " + cond + " " +
+         cur_context.getInvocationCount() + " " + cur_context + " " + cur_parameters);
     }
    
    @Override public boolean isAutopopupCompletion() {
@@ -848,27 +913,82 @@ private class CompleteProc implements BatchConsumer<CompletionResult> {
 
 
 
+/********************************************************************************/
+/*                                                                              */
+/*      Handle CREATEPRIVATE command                                            */
+/*                                                                              */
+/********************************************************************************/
+
+void handleCreatePrivate(Project p,Module m,String bid,String pid,String file,
+      String frompid,IvyXmlWriter xw)
+{
+   VirtualFile vf = BubjetUtil.getVirtualFile(file);
+   BubjetFileData fd = findFile(vf,bid);
+   CreatePrivateAction cpa = new CreatePrivateAction(fd,pid,frompid);
+   cpa.start();
+   xw.text(cpa.getBufferPid());
+}
 
 
 
+private class CreatePrivateAction extends BubjetAction.Read {
+
+   private BubjetFileData file_data;
+   private String buffer_pid;
+   private String from_pid;
+   
+   CreatePrivateAction(BubjetFileData fd,String pid,String frompid) {
+      file_data = fd;
+      buffer_pid = pid;
+      from_pid = frompid;
+    }
+   
+   String getBufferPid()                        { return buffer_pid; }
+   
+   @Override void process() {
+      if (buffer_pid == null) {
+         for (int i = 0; i < 100; ++i) {
+            int v = (int) Math.random()*10000000;
+            String pid = "PID_" + v;
+            if (file_data.createPrivateBuffer(pid,from_pid)) break;
+          }
+       }
+    }
+   
+}
 
 
+
+/********************************************************************************/
+/*                                                                              */
+/*      Handle REMOVEPRIVATE command                                            */
+/*                                                                              */
+/********************************************************************************/
+
+void handleRemovePrivate(Project p,Module m,String bid,String file)
+{
+   VirtualFile vf = BubjetUtil.getVirtualFile(file);
+   BubjetFileData fd = findFile(vf,null);
+   if (fd != null) fd.removePrivateBuffer(bid);
+}
 /********************************************************************************/
 /*                                                                              */
 /*      File data manipulation                                                  */
 /*                                                                              */
 /********************************************************************************/
 
-private synchronized BubjetFileData findFile(Module m,VirtualFile vf,String bid)
+synchronized BubjetFileData findFile(VirtualFile vf,String bid)
 {
    if (vf == null) return null;
    
    BubjetFileData fd = file_map.get(vf);
-   if (fd == null) {
+   if (fd == null && bid != null) {
       BubjetLog.logD("START FILE " + vf + " " + bid);
       fd = new BubjetFileData(app_service,for_project,vf);
       file_map.put(vf,fd);
     }
+   else if (fd == null) return null;
+   
    fd.beginUser(bid);
   
    return fd;
@@ -945,6 +1065,159 @@ private static class ParamSettings {
 
 
   
+
+/********************************************************************************/
+/*                                                                              */
+/*      Background Compile Error Checking Thread                                */
+/*                                                                              */
+/********************************************************************************/
+
+void addToQueue(Collection<PsiFile> fset,UpdateType ut)
+{
+   if (fset == null) return;
+   
+   synchronized(analysis_queue) {
+      for (PsiFile pf : fset) addToQueue(pf,ut);
+      analysis_queue.notifyAll();
+    }
+}
+
+
+
+void addToQueue(PsiFile f,UpdateType ut)
+{
+   if (f == null) return; 
+   
+   BubjetLog.logD("Add to analysis queue: " + ut + " " + f);
+   
+   synchronized (analysis_queue) {
+      if (active_files.contains(f)) return;
+      UpdateType utold = analysis_queue.get(f);
+      if (utold == null) analysis_queue.put(f,ut);
+      else if (ut == utold) return;
+      else if (ut.ordinal() > utold.ordinal()) analysis_queue.put(f,ut);
+    }
+}
+
+
+void addFilesToQueue(Collection<VirtualFile> vfset,UpdateType ut)
+{
+   if (!ApplicationManager.getApplication().isReadAccessAllowed()) {
+      BubjetLog.logE("READ ACCESS DENIED on files add");
+      return;
+    }
+   
+   synchronized (analysis_queue) {
+      for (VirtualFile vf : vfset) {
+         PsiFile pf = BubjetUtil.getPsiFile(for_project,vf);
+         addToQueue(pf,ut);
+       }
+      analysis_queue.notifyAll();
+    }
+}
+
+
+private void removeFromQueue(PsiFile f)
+{
+   if (f == null) return;
+   
+   synchronized (analysis_queue) {
+      active_files.remove(f);
+    }
+}
+
+
+class AnalysisThread extends Thread {
+  
+   private boolean do_progress;
+   private BubjetProgressIndicator progress_indicator;
+   
+   AnalysisThread(boolean prog) {
+      super("Bubjet Compiler Analysis Thread");
+      setDaemon(true);
+      do_progress = prog;
+    }
+   
+   @Override public void run() {
+      BubjetLog.logD("Analysis queue started");
+      DumbService ds = DumbService.getInstance(for_project);
+      BubjetLog.logD("Analysis queue running");
+      double maxsz = 0;
+      for ( ; ; ) {
+         maxsz = Math.max(maxsz,analysis_queue.size());
+         UpdateType ut = null;
+         PsiFile pf = null;
+         synchronized (analysis_queue) {
+            while (analysis_queue.isEmpty()) {
+               try {
+                  analysis_queue.wait();
+                }
+               catch (InterruptedException e) { }
+             }
+            maxsz = Math.max(maxsz,analysis_queue.size());
+            for (Iterator<PsiFile> it = analysis_queue.keySet().iterator(); it.hasNext(); ) {
+               pf = it.next();
+               ut = analysis_queue.get(pf);
+               it.remove();
+               break;
+             }
+          }
+         if (pf == null) continue;
+         
+         if (do_progress && maxsz > 0) {
+            if (progress_indicator == null) {
+               progress_indicator = new BubjetProgressIndicator("FileAnalysis",for_project);
+               progress_indicator.setText("File Analysis");
+               progress_indicator.start();
+             }
+            else {
+               progress_indicator.setFraction((maxsz - analysis_queue.size() - 1)/maxsz);
+             }
+            progress_indicator.setText2(pf.getName());
+          }
+         
+         BubjetLog.logD("Analyze File " + ut + " " + pf);
+         AnalysisRunner arun = new AnalysisRunner(pf,ut);
+         ds.runReadActionInSmartMode(arun);
+         if (progress_indicator != null && maxsz > 0) {
+            if (analysis_queue.isEmpty()) {
+               maxsz = 0;
+               progress_indicator.stop();
+               progress_indicator = null;
+             } 
+            else {
+               progress_indicator.setFraction((maxsz - analysis_queue.size())/maxsz);
+             }
+          }
+       }
+    }
+}
+
+
+private class AnalysisRunner implements Runnable {
+   
+   private PsiFile for_file;
+   private boolean do_update;
+   
+   AnalysisRunner(PsiFile pf,UpdateType ut) {
+      for_file = pf;
+      do_update = ut == UpdateType.CHECK;
+    }
+   
+   @Override public void run() {
+      BubjetLog.logD("ANALYSIS UPDATE FOR FILE " + for_file);
+      BubjetErrorPass ep = new BubjetErrorPass(BubjetEditManager.this,for_file,do_update); 
+      ep.start();
+    }
+}
+
+
+
+
+
+
+
+
 }       // end of class BubjetEditManager
 
 

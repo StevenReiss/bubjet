@@ -33,7 +33,7 @@ public class BubjetProgressManagerListener implements ProgressManagerListener {
 
 public void beforeTaskStart(Task t,ProgressIndicator ind)
 { 
-   BubjetLog.logD("beforeTaskStart " + t);
+   BubjetLog.logD("beforeTaskStart " + t + " " + ind);
 }
 
 

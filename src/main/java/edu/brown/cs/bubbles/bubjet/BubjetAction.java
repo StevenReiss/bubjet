@@ -124,6 +124,8 @@ void start()
 
 
 
+
+
 /********************************************************************************/
 /*                                                                              */
 /*      Task controller                                                         */
@@ -134,7 +136,7 @@ void start()
 {
    BubjetLog.logD("CHECK ACTION " + need_dispatch + " " + progress_name + " " +
          smart_action + " " + need_read + " " + need_write + " " + command_name + " " +
-         run_background + " " + 
+         run_background + " " + progress_indicator + " " +
          ApplicationManager.getApplication().isDispatchThread() + " " +
          ApplicationManager.getApplication().isWriteThread() + " " + 
          ApplicationManager.getApplication().isWriteAccessAllowed() + " " +
@@ -143,7 +145,7 @@ void start()
    if (progress_name != null && progress_indicator == null) {
       if (progress_name.equals("") || progress_name.equals("*")) {
          progress_indicator = new ProgressIndicatorBase();
-         BubjetLog.logD("CREATE DUMMY PROGRESS INDICATOR");
+         BubjetLog.logD("Create Hidden ProgressIndicator");
        }
       else {
          progress_indicator = new BubjetProgressIndicator(progress_name,for_project);
@@ -200,7 +202,11 @@ void start()
 
 
 
+
+
+
 abstract void process() throws BubjetException;
+
 
 
 /********************************************************************************/
@@ -230,6 +236,14 @@ public static abstract class SmartRead extends BubjetAction {
     }
 
 }       // end of inner class SmartRead
+
+
+public static abstract class SmartBackgroundRead extends BubjetAction {
+   
+   SmartBackgroundRead(Project p,String task) {
+      super(p,true,false,task,false,true,true,null,null);
+    }
+}
 
 
 public static abstract class WriteDispatch extends BubjetAction {
@@ -265,6 +279,15 @@ public static abstract class Command extends BubjetAction {
       super(p,false,true,null,true,false,false,cmd,doc);
     }
    
+}       // end of inner class Write
+
+
+public static abstract class SimpleCommand extends BubjetAction {
+   
+   SimpleCommand(Project p,String cmd,Document doc) {
+      super(p,false,false,null,true,false,false,cmd,doc);
+    }
+
 }       // end of inner class Write
 
 

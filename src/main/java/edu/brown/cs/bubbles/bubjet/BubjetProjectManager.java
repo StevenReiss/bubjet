@@ -22,10 +22,7 @@
 
 package edu.brown.cs.bubbles.bubjet;
 
-import com.intellij.openapi.module.ModuleManager;
-import com.intellij.compiler.CompilerConfiguration;
 import com.intellij.ide.highlighter.JavaFileType;
-import com.intellij.lang.java.JavaLanguage;
 import com.intellij.openapi.compiler.CompileContext;
 import com.intellij.openapi.compiler.CompileScope;
 import com.intellij.openapi.compiler.CompileStatusNotification;
@@ -34,12 +31,9 @@ import com.intellij.openapi.compiler.CompilerMessage;
 import com.intellij.openapi.compiler.CompilerMessageCategory;
 import com.intellij.openapi.compiler.CompilerPaths;
 import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.LanguageLevelUtil;
-import com.intellij.pom.java.LanguageLevel;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.projectRoots.Sdk;
 import com.intellij.openapi.roots.ContentEntry;
-import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.roots.OrderEntry;
 import com.intellij.openapi.roots.OrderRootType;
 import com.intellij.openapi.roots.PackageIndex;
@@ -52,11 +46,6 @@ import com.intellij.psi.PsiImportStatement;
 import com.intellij.psi.PsiImportStaticStatement;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiManager;
-import com.intellij.psi.codeStyle.CodeStyleSettings;
-import com.intellij.psi.codeStyle.CodeStyleSettingsManager;
-import com.intellij.psi.codeStyle.CommonCodeStyleSettings;
-import com.intellij.psi.codeStyle.CustomCodeStyleSettings;
-import com.intellij.psi.codeStyle.CommonCodeStyleSettings.IndentOptions;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.util.Query;
 import com.intellij.openapi.fileTypes.FileType;
@@ -75,9 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.jdom.Element;
-import org.jdom.Attribute;
-import org.jdom.DataConversionException;
+
 
 /**
  *      IntelliJ Idea and Eclipse (and hence Bubbles) use different terminology
@@ -107,8 +94,34 @@ private BubjetApplicationService app_service;
 private Map<Project,Boolean> open_projects;
 private Set<Module> known_modules;
 
+private static Map<String,String> option_map;
 
-
+static {
+   option_map = new HashMap<>();
+   option_map.put("tabulation.size","TAB_SIZE");
+   option_map.put("indentation.size","INDENT_SIZE");
+   option_map.put("indent_body_declaration_compare_to_type_header",
+         "DO_NOT_INDENT_TOP_LEVEL_CLASS_MEMBERS");
+   option_map.put("continuation_indent","CONTINUATION_INDENT_SIZE");
+   option_map.put("alignment_for_expressions_in_array_initializer",
+         "*ALIGN_MULTILINE_ARRAY_INITIALIZER_EXPRESSION");
+   option_map.put("alignment_for_condition_expression",
+         "*ALIGN_MULTILINE_TERNARY_OPERATION");
+   option_map.put("brace_position_for_block","*BRACE_STYLE");
+   option_map.put("brace_position_for_array_initializer",
+         "*ARRAY_INITIALIZER_LBRACE_ON_NEXT_LINE");
+   option_map.put("brace_position_for_method_declaration","*METHOD_BRACE_STYLE");
+   option_map.put("brace_position_for_type_declaration","*CLASS_BRACE_STYLE");
+   option_map.put("indent_switchstatements_compare_to_switch","INDENT_CASE_FROM_SWITCH");
+   option_map.put("indent_switchstatements_compare_to_cases","INDENT_BREAK_FROM_CASE");
+   option_map.put("alignment_for_parameters_in_method_declaration",
+         "*ALIGN_MULTILINE_PARAMETERS");
+   option_map.put("alignment_for_arguments_in_method_declaration",
+         "*ALIGN_MULTILINE_PARAMETERS_IN_CALLS");
+   option_map.put("useContractsForJava","useContractsForJava");
+   option_map.put("useJunit","useJunit");
+   option_map.put("useAssertions","useAssertions");
+}
 
 
 
@@ -178,12 +191,10 @@ synchronized void waitForProject(Project p)
 
 private void initializeProject(Project p)
 {
-   if (!p.isInitialized()) {
-      
-    }
+   if (!p.isInitialized()) { }
+   BubjetLog.logD("Initialize project " + p);
    
-   ModuleManager mm = ModuleManager.getInstance(p);
-   for (Module m : mm.getModules()) {
+   for (Module m : BubjetUtil.getAllModules(p)) {
       known_modules.add(m);
     }
 }
@@ -202,7 +213,7 @@ Collection<Project> getProjects()
 /*                                                                              */
 /********************************************************************************/
 
-void listProjects(String ws,IvyXmlWriter xw)
+void handleListProjects(String ws,IvyXmlWriter xw)
 {
    Project p = findProject(ws);
    for (Module m : known_modules) {
@@ -211,14 +222,12 @@ void listProjects(String ws,IvyXmlWriter xw)
       xw.field("NAME",m.getName());
       xw.field("OPEN",m.isLoaded());
       xw.field("WORKSPACE",p.getBasePath());
-      ModuleManager mm = ModuleManager.getInstance(p);
-      ModuleRootManager mrm = ModuleRootManager.getInstance(m);
       outputProjectProperties(m,xw);
       xw.field("BASE",m.getModuleFilePath());
-      for (Module dm : mrm.getDependencies()) {
+      for (Module dm : BubjetUtil.getDependencies(m)) {
          xw.textElement("REFERENCES",dm.getName());
        }
-      for (Module dm : mm.getModuleDependentModules(m)) {
+      for (Module dm : BubjetUtil.getUsedBy(m)) {
          xw.textElement("USEDBY",dm.getName());
        }
       xw.end("PROJECT");
@@ -229,10 +238,11 @@ void listProjects(String ws,IvyXmlWriter xw)
 
 private void outputProjectProperties(Module m,IvyXmlWriter xw)
 {
-   ModuleRootManager mrm = ModuleRootManager.getInstance(m);
    boolean isjava = false;
    boolean isandroid = false;
-   Sdk sdk = mrm.getSdk();
+   Sdk sdk = BubjetUtil.getSdk(m);
+   if (sdk == null) return;             // not for this project
+   
    if (m.getModuleTypeName() == null || m.getModuleTypeName().equals("JAVA_MODULE")) 
        isjava = true;
    BubjetLog.logD("Module " + m.getName() + " TYPE = " + m.getModuleTypeName());
@@ -302,28 +312,6 @@ private class ModuleThread extends Thread {
 
 
 
-/********************************************************************************/
-/*                                                                              */
-/*      Handle PREFERENCES command                                              */
-/*                                                                              */
-/********************************************************************************/
-
-void outputPreferences(String ws,String proj,IvyXmlWriter xw)
-{
-   Project p = findProject(ws);
-   Module m = findModule(p,proj);
-   if (m == null) return;
-   Map<String,String> prefs = getPreferences(m);
-  
-   xw.begin("PREFERENCES");
-   for (Map.Entry<String,String> ent : prefs.entrySet()) {
-      xw.begin("PREF");
-      xw.field("NAME",ent.getKey());
-      xw.field("VALUE",ent.getValue());
-      xw.end("PREF");
-    }
-   xw.end("PREFERENCES");
-}
 
 
 
@@ -333,7 +321,7 @@ void outputPreferences(String ws,String proj,IvyXmlWriter xw)
 /*                                                                              */
 /********************************************************************************/
 
-void buildProject(String ws,String proj,boolean clean,boolean full,boolean refresh,
+void handleBuildProject(String ws,String proj,boolean clean,boolean full,boolean refresh,
       IvyXmlWriter xw)
 {
    Project p = findProject(ws);
@@ -365,7 +353,7 @@ void buildProject(String ws,String proj,boolean clean,boolean full,boolean refre
    act.start();
    
    CompileContext ctx = bn.getResult();
-   BuildResultAction acta = new BuildResultAction(p,ctx,xw);
+   BuildResultAction acta = new BuildResultAction(p,m,ctx,xw);
    acta.start();
    
 // CompilerManager cm = CompilerManager.getInstance(p);
@@ -380,12 +368,13 @@ void buildProject(String ws,String proj,boolean clean,boolean full,boolean refre
 private class BuildResultAction extends BubjetAction.Read {
    
    private Project for_project;
+   private Module for_module;
    private CompileContext for_context;
    private IvyXmlWriter xml_writer;
    
-   BuildResultAction(Project p,CompileContext ctx,
-         IvyXmlWriter xw) {
+   BuildResultAction(Project p,Module m,CompileContext ctx,IvyXmlWriter xw) {
       for_project = p;
+      for_module = m;
       for_context = ctx;
       xml_writer = xw;
     }
@@ -399,11 +388,12 @@ private class BuildResultAction extends BubjetAction.Read {
          if (ct++ < MAX_PROBLEM) BubjetUtil.outputProblem(for_project,msg,xml_writer);
        }
       // want to handle TODO messages -- requires a search
+      
+      BubjetEditManager em = app_service.getEditManager(for_project);
+      em.addFilesToQueue(BubjetUtil.findSourceFiles(for_module,null), UpdateType.INITIAL);
     }
    
 }       // end of inner class BuildProjectAction
-
-
 
 
 
@@ -426,7 +416,6 @@ private class BuildAction extends BubjetAction.Dispatch {
     }
    
    @Override void process() {
-      // PsiDocumentManager.getInstance(for_project).commitAllDocuments();
       BubjetLog.logD("BUILD ACTION STARTED");
       CompilerManager cm = CompilerManager.getInstance(for_project);
       if (rebuild_all) {
@@ -434,7 +423,7 @@ private class BuildAction extends BubjetAction.Dispatch {
        }
       else {
          CompileScope pscp = cm.createProjectCompileScope(for_project);
-         cm.makeWithModalProgress(pscp,build_notifier);
+         cm.make(pscp,build_notifier);
        }
       BubjetLog.logD("BUILD ACTION DONE");
     }
@@ -516,19 +505,15 @@ void createPackage(String ws,String proj,String pkg,boolean frc,IvyXmlWriter xw)
    if (p == null) return;
    
    Module m = findModule(p,proj);
-   GlobalSearchScope scp = null;
-   if (m == null) scp = GlobalSearchScope.allScope(p);
-   else scp = GlobalSearchScope.moduleScope(m);
+   GlobalSearchScope scp = BubjetUtil.getSearchScope(p,m);
    
-   ModuleRootManager mrm = ModuleRootManager.getInstance(m);
    PackageIndex pidx = PackageIndex.getInstance(p);
    PsiManager psim = PsiManager.getInstance(p);
    String xpkg = pkg;
-   for (VirtualFile vf3 : mrm.getSourceRoots()) {
+   for (VirtualFile vf3 : BubjetUtil.getSourceRoots(m)) {
       BubjetLog.logD("SOURCE ROOT " + vf3);
       PsiDirectory pd = psim.findDirectory(vf3);
     }  
-   
 }
 
 
@@ -556,6 +541,7 @@ void getAllNames(String ws,String proj,String bid,Set<String> files,String bkg,
    else {
       BubjetProjectManager pm = app_service.getProjectManager();
       for (Module m1 : pm.getAllModules(p)) {
+         BubjetLog.logD("Queue module " + m1.getName());
          handleAllNames(m1,files,nt,xw);
        }
     }
@@ -617,19 +603,19 @@ private class OutputModuleNamesAction extends BubjetAction.SmartRead {
    
    @Override void process() {
       if (for_module == null) return;
-      ModuleRootManager mrm = ModuleRootManager.getInstance(for_module);
+      BubjetLog.logD("Work on names for moudlue " + for_module.getName());
       Set<VirtualFile> excl = new HashSet<>();
       PsiManager psim = PsiManager.getInstance(for_module.getProject());
-      for (VirtualFile vf : mrm.getExcludeRoots()) {
+      for (VirtualFile vf : BubjetUtil.getExcludeRoots(for_module)) {
          BubjetLog.logD("EXCLUDE " + vf + " " + BubjetUtil.outputFileName(vf));
          excl.add(vf);
        }
       setupWriter();
       BubjetUtil.outputJavaProject(for_module,xml_writer);
       Set<String> pkgs = new HashSet<>();
-      for (VirtualFile vf3 : mrm.getSourceRoots()) {
-         Collection<VirtualFile> cands = findSourceFiles(vf3,excl,null);
-         BubjetLog.logD("Start with root " + vf3 + " " + cands.size());
+      for (VirtualFile vf3 : BubjetUtil.getSourceRoots(for_module)) {
+         Collection<VirtualFile> cands = BubjetUtil.findSourceFiles(vf3,excl,null);
+         BubjetLog.logD("Start with root " + vf3 + " " + cands.size() + " " + for_module.getName());
          for (VirtualFile vf : cands) {
             if (!vf.isValid()) continue;
             setupWriter();
@@ -698,13 +684,6 @@ private class OutputModuleNamesAction extends BubjetAction.SmartRead {
 
 
 
-
-
-
-
-   
-
-
 private class NameThread extends Thread {
 
    private Project for_project;
@@ -743,6 +722,7 @@ private class NameThread extends Thread {
 
 
 
+
 /********************************************************************************/
 /*                                                                              */
 /*      Output module information                                               */
@@ -753,11 +733,9 @@ private void outputModule(Module m,boolean file,boolean path,boolean cls,boolean
       IvyXmlWriter xw)
 {
    if (m == null) return;
-   ModuleRootManager mrm = ModuleRootManager.getInstance(m);
-   ModuleManager mm = ModuleManager.getInstance(m.getProject());
    
    Set<VirtualFile> excl = new HashSet<>();
-   for (VirtualFile vf : mrm.getExcludeRoots()) {
+   for (VirtualFile vf : BubjetUtil.getExcludeRoots(m)) {
       BubjetLog.logD("EXCLUDE " + vf + " " + BubjetUtil.outputFileName(vf));
       excl.add(vf);
     }
@@ -781,7 +759,7 @@ private void outputModule(Module m,boolean file,boolean path,boolean cls,boolean
    
    if (file) {
       xw.begin("FILES");
-      for (VirtualFile vf3 : mrm.getSourceRoots()) {
+      for (VirtualFile vf3 : BubjetUtil.getSourceRoots(m)) {
          BubjetLog.logD("SOURCE ROOT " + vf3);
          addSourceFiles(vf3,excl,xw,null);
        }
@@ -794,15 +772,16 @@ private void outputModule(Module m,boolean file,boolean path,boolean cls,boolean
       xw.end("CLASSES");
     }
   
-   for (Module dm : mrm.getDependencies()) {
+   for (Module dm : BubjetUtil.getDependencies(m)) {
       xw.textElement("REFERENCES",dm.getName());
     }
-   for (Module dm : mm.getModuleDependentModules(m)) {
+   for (Module dm : BubjetUtil.getUsedBy(m)) {
       xw.textElement("USEDBY",dm.getName());
     }
    
    if (opt) {
-      Map<String,String> prefs = getPreferences(m);
+      BubjetPreferenceManager rm = app_service.getPreferenceManager(m.getProject());
+      Map<String,String> prefs = rm.getPreferences(m); 
       for (Map.Entry<String,String> ent : prefs.entrySet()) {
          xw.begin("OPTION");
          xw.field("NAME",ent.getKey());
@@ -823,18 +802,6 @@ private void outputModule(Module m,boolean file,boolean path,boolean cls,boolean
 
 /********************************************************************************/
 /*                                                                              */
-/*      Output message information                                              */
-/*                                                                              */
-/********************************************************************************/
-
-
-
-
-
-
-
-/********************************************************************************/
-/*                                                                              */
 /*      Handle class paths                                                      */
 /*                                                                              */
 /********************************************************************************/
@@ -845,11 +812,10 @@ private void addClassPaths(Module m,IvyXmlWriter xw,Set<Object> done,boolean nes
    if (!done.add(m)) return;
    
    Set<String> spaths = new HashSet<>();
-   ModuleRootManager mrm = ModuleRootManager.getInstance(m);
    BubjetLog.logD("Getting class paths for " + m.getName());
-   for (ContentEntry cent : mrm.getContentEntries()) {
+   for (ContentEntry cent : BubjetUtil.getContentEntries(m)) {
       VirtualFile vf1 = cent.getFile();
-      if (!isValidDirectory(vf1)) continue;
+      if (!BubjetUtil.isValidDirectory(vf1)) continue;
       xw.begin("PATH");
       xw.field("TYPE","SOURCE");
       xw.field("ID",vf1.hashCode());
@@ -872,8 +838,7 @@ private void addClassPaths(Module m,IvyXmlWriter xw,Set<Object> done,boolean nes
       xw.textElement("BINARY",BubjetUtil.outputFileName(p2));
       xw.end("PATH");
     }
-   List<Library> libs = new ArrayList<>();
-   mrm.orderEntries().forEachLibrary(lib -> libs.add(lib));
+   List<Library> libs = BubjetUtil.getLibraries(m);
    for (Library lib : libs) {
       for (VirtualFile vf4 : lib.getFiles(OrderRootType.CLASSES)) {
          if (done.add(vf4)) {
@@ -887,7 +852,7 @@ private void addClassPaths(Module m,IvyXmlWriter xw,Set<Object> done,boolean nes
        }
     }
    if (sys) {
-      for (OrderEntry oent : mrm.getOrderEntries()) {
+      for (OrderEntry oent : BubjetUtil.getOrderEntries(m)) {
          VirtualFile [] vfs = oent.getFiles(OrderRootType.CLASSES);
          if (vfs.length == 0 || done.contains(vfs[0])) continue;
          BubjetLog.logD("SYSTEM " + oent.getOwnerModule() + " " + oent.getPresentableName());
@@ -916,47 +881,16 @@ private void addClassPaths(Module m,IvyXmlWriter xw,Set<Object> done,boolean nes
        }
     }
    
-   List<Module> mods = new ArrayList<>();
-   mrm.orderEntries().forEachModule(mod -> mods.add(mod));
-   for (Module mod : mods) {
+   for (Module mod : BubjetUtil.getOrderModules(m)) {
       addClassPaths(mod,xw,done,true,false);
     }
 }
 
 
 
-/********************************************************************************/
-/*                                                                              */
-/*      Handle source files                                                     */
-/*                                                                              */
-/********************************************************************************/
-
-Collection<VirtualFile> findSourceFiles(VirtualFile base,Set<VirtualFile> excl,Collection<VirtualFile> rslt)
-{
-   if (rslt == null) rslt = new HashSet<>();
-   
-   if (excl != null && excl.contains(base)) return rslt;
-   
-   if (!base.isValid()) ;
-   else if (base.isDirectory()) {
-      if (isValidDirectory(base)) {
-         for (VirtualFile chld : base.getChildren()) {
-            findSourceFiles(chld,excl,rslt);
-          }
-       }
-    }
-   else if (isValidFile(base)) {
-      rslt.add(base);
-    }
-   
-   return rslt;
-}
-
-
-
 private void addSourceFiles(VirtualFile base,Set<VirtualFile> excl,IvyXmlWriter xw,FileFilter ff) 
 {
-   Collection<VirtualFile> cands = findSourceFiles(base,excl,null);
+   Collection<VirtualFile> cands = BubjetUtil.findSourceFiles(base,excl,null);
    for (VirtualFile vf : cands) {
       if (!vf.isValid()) continue;
       File f = new File(BubjetUtil.outputFileName(vf));
@@ -989,10 +923,9 @@ private void addSourceFiles(VirtualFile base,Set<VirtualFile> excl,IvyXmlWriter 
 private void addClasses(Module m,Set<VirtualFile> excl,IvyXmlWriter xw)
 {
    // build class name to source file map
-   ModuleRootManager mrm = ModuleRootManager.getInstance(m);   
    Set<VirtualFile> vfs = new HashSet<>();
-   for (VirtualFile vf3 : mrm.getSourceRoots()) {
-      findSourceFiles(vf3,excl,vfs);
+   for (VirtualFile vf3 : BubjetUtil.getSourceRoots(m)) {
+      BubjetUtil.findSourceFiles(vf3,excl,vfs);
     }
    Map<String,VirtualFile> srcmap = new HashMap<>();
    for (VirtualFile vf4 : vfs) {
@@ -1023,7 +956,7 @@ private void addTopClasses(Module m,VirtualFile vf,Set<Object> done,Map<String,V
       IvyXmlWriter xw)
 {
    if (vf == null) return;
-   if (!isValidDirectory(vf)) return;
+   if (!BubjetUtil.isValidDirectory(vf)) return;
    for (VirtualFile vf1 : vf.getChildren()) {
       addClasses(vf1,null,done,srcs,xw);
     }
@@ -1036,7 +969,7 @@ private void addClasses(VirtualFile vf,String pfx,Set<Object> done,
 {
    if (done.add(vf)) {
       if (vf.isDirectory()) {
-         if (isValidDirectory(vf)) {
+         if (BubjetUtil.isValidDirectory(vf)) {
             if (pfx == null) pfx = vf.getName();
             else pfx = pfx + "." + vf.getName();
             xw.textElement("PACKAGE",pfx);
@@ -1094,9 +1027,8 @@ private class ModAddImportsAction extends BubjetAction.Read {
    @Override void process() {
       BubjetLog.logD("Add imports action " + for_module);
       List<VirtualFile> srcs = new ArrayList<>();
-      ModuleRootManager mrm = ModuleRootManager.getInstance(for_module);   
-      for (VirtualFile vf3 : mrm.getSourceRoots()) {
-         findSourceFiles(vf3,exclude_files,srcs);
+      for (VirtualFile vf3 : BubjetUtil.getSourceRoots(for_module)) {
+         BubjetUtil.findSourceFiles(vf3,exclude_files,srcs);
        }
       
       PsiManager pm = PsiManager.getInstance(for_module.getProject());
@@ -1141,141 +1073,6 @@ private class ModAddImportsAction extends BubjetAction.Read {
 
 
 
-/********************************************************************************/
-/*                                                                              */
-/*      Preference/Option methods                                               */
-/*                                                                              */
-/********************************************************************************/
-
-private Map<String,String> getPreferences(Module m)
-{
-   GetPreferencesAction gpa = new GetPreferencesAction(m);
-   gpa.start();
-   return gpa.getResult();
-}
-
-
-private class GetPreferencesAction extends BubjetAction.Read {
-   
-   private Module for_module;
-   private Map<String,String> result_map;
-   
-   GetPreferencesAction(Module m) {
-      for_module = m;
-      result_map = null;
-    }
-   
-   Map<String,String> getResult()                       { return result_map; }
-   
-   @Override void process() {
-      app_service.getProjectManager().waitForProject(for_module.getProject());
-      
-      Map<String,String> rslt = new HashMap<>();
-      
-      ModuleRootManager mrm = ModuleRootManager.getInstance(for_module);
-      Sdk sdk = mrm.getSdk();
-      
-      CodeStyleSettingsManager csm = CodeStyleSettingsManager.getInstance(for_module.getProject());
-      CodeStyleSettings css = csm.createSettings();
-      BubblesSettings bss = null;
-      // need to register using LanguageCodeStyleSettingsProvider extension point
-   // BubblesSettings bss = css.getCustomSettings(BubblesSettings.class);
-      CommonCodeStyleSettings ccss = css.getCommonSettings(JavaLanguage.INSTANCE);
-      IndentOptions ind = css.getIndentOptions(JavaFileType.INSTANCE);
-      
-      formatOpt("tabulation.size",ind.TAB_SIZE,rslt);
-      formatOpt("indentation.size",ind.INDENT_SIZE,rslt);
-      formatOpt("indent_statements_compare_to_block",true,rslt);
-      formatOpt("indent_statements_compare_to_body",true,rslt);
-      formatOpt("indent_body_declaration_compare_to_type_header",
-            !ccss.DO_NOT_INDENT_TOP_LEVEL_CLASS_MEMBERS,rslt);
-      formatOpt("continuation_indent",ind.CONTINUATION_INDENT_SIZE,rslt);
-      int arr = 0;
-      if (ccss.ALIGN_MULTILINE_ARRAY_INITIALIZER_EXPRESSION) arr = 1;
-      formatOpt("alignment_for_expressions_in_array_initializer",arr,rslt);
-      int cond = 2;
-      if (ccss.ALIGN_MULTILINE_TERNARY_OPERATION) cond = 1;
-      formatOpt("alignment_for_condition_expression",cond,rslt);
-      formatOpt("brace_position_for_block",getBraceStyle(ccss.BRACE_STYLE),rslt);
-      String arrs = "eol";
-      if (ccss.ARRAY_INITIALIZER_LBRACE_ON_NEXT_LINE) arrs = "next_line_shifted";
-      formatOpt("brace_position_for_array_initializer",arrs,rslt);
-      formatOpt("brace_position_for_method_declaration",getBraceStyle(ccss.METHOD_BRACE_STYLE),rslt);
-      formatOpt("brace_position_for_type_declaration",getBraceStyle(ccss.CLASS_BRACE_STYLE),rslt);
-      
-      formatOpt("indent_switchstatements_compare_to_switch",ccss.INDENT_CASE_FROM_SWITCH,rslt);
-      formatOpt("indent_switchstatements_compare_to_cases",ccss.INDENT_BREAK_FROM_CASE,rslt);
-      int parm = 1;
-      if (ccss.ALIGN_MULTILINE_PARAMETERS) parm = 2;
-      formatOpt("alignment_for_parameters_in_method_declaration",parm,rslt);
-      int args = 1;
-      if (ccss.ALIGN_MULTILINE_PARAMETERS_IN_CALLS) parm = 2;
-      formatOpt("alignment_for_arguments_in_method_declaration",args,rslt);
-      
-      CompilerConfiguration cc = CompilerConfiguration.getInstance(for_module.getProject());
-      LanguageLevel ll = LanguageLevelUtil.getEffectiveLanguageLevel(for_module);
-      String llv1 = sdk.getVersionString();
-      String llv2 = sdk.getName();
-      String llv = ll.toString();
-      BubjetLog.logD("COMPILER " + ll + " " + llv + " " + llv1 + " " + llv2);
-      if (llv.startsWith("JDK_")) llv = llv.substring(4);
-      llv = llv.replace("_",".");
-      compilerOpt("source",llv,rslt);
-      String tgt = cc.getBytecodeTargetLevel(for_module);
-      if (tgt == null) tgt = llv;
-      compilerOpt("codegen.targetPlatform",tgt,rslt);
-      compilerOpt("compliance",llv,rslt);
-      compilerOpt("problem.fatalOptionalError",false,rslt);
-      compilerOpt("processAnnotations",cc.isAnnotationProcessorsEnabled(),rslt);
-      
-      if (bss != null) {
-         bubblesOpt("useContractsForJava",bss.use_contracts,rslt);
-         bubblesOpt("useJunit",bss.use_junit,rslt);
-         bubblesOpt("useAssertions",bss.use_assertions,rslt);
-       }
-   
-      boolean isandroid = false;
-      if (sdk.getName().contains("android")) isandroid = true;   
-      rslt.put("bedrock.useAndroid",Boolean.toString(isandroid));
-      
-      result_map = rslt;
-    }
-   
-}       // end of inner class GetPreferencesAction
-
-private String getBraceStyle(int v)
-{
-   if (v == CommonCodeStyleSettings.END_OF_LINE) return "eol";
-   else if (v == CommonCodeStyleSettings.NEXT_LINE) return "next_line";
-   else if (v == CommonCodeStyleSettings.NEXT_LINE_SHIFTED) return "next_line_shitfed";
-   else if (v == CommonCodeStyleSettings.NEXT_LINE_SHIFTED2) return "next_line_shifted";
-   else if (v == CommonCodeStyleSettings.NEXT_LINE_IF_WRAPPED) return "next_line_if_wrapped";
-   return "eol";
-}
-
-
-private void formatOpt(String name,Object val,Map<String,String> opts)
-{
-   String pnm = "org.eclipse.jdt.core.formatter." + name;
-   String pvl = String.valueOf(val);
-   opts.put(pnm,pvl);
-}
-
-private void compilerOpt(String name,Object val,Map<String,String> opts)
-{
-   String pnm = "org.eclipse.jdt.core.compiler." + name;
-   String pvl = String.valueOf(val);
-   opts.put(pnm,pvl);
-}
-
-private void bubblesOpt(String name,Object val,Map<String,String> opts)
-{
-   String pnm = "edu.brown.cs.bubbles.bedrock." + name;
-   String pvl = String.valueOf(val);
-   opts.put(pnm,pvl);
-}
-
-
 
 /********************************************************************************/
 /*                                                                              */
@@ -1297,34 +1094,6 @@ void saveAll()
 /*      Utility methods                                                         */
 /*                                                                              */
 /********************************************************************************/
-
-private boolean isValidDirectory(VirtualFile vf)
-{
-   if (vf == null) return false;
-   if (!vf.exists()) return false;
-   if (vf.getChildren().length == 0) return false;
-   if (vf.getName().equals("bBACKUP")) return false;
-   if (vf.getName().equals(".idea")) return false;
-   return true;
-}
-
-
-private boolean isValidFile(VirtualFile vf)
-{
-   if (vf == null) return false;
-   if (!vf.isValid()) return false;
-   if (!vf.exists()) return false;
-   if (vf.getName().equals("bCONTROL")) return false;
-   if (vf.getName().equals("bBUFFERS")) return false;
-   return true;
-}
-
-
-
-
-
-
-
 
 Project findProject(String ws)
 {
@@ -1379,57 +1148,48 @@ List<Module> getAllModules(Project p)
 }
 
 
-
-
-
-
-/********************************************************************************/
-/*                                                                              */
-/*      Project Settings                                                        */
-/*                                                                              */
-/********************************************************************************/
-
-private static final String     SETTINGS_TAG = "BUBJET";
-
-private static class BubblesSettings extends CustomCodeStyleSettings {
+String findSourceFile(Project p,String path,boolean all)
+{
+   if (path == null) return null;
+   File f1 = new File(path);
+   if (f1.isAbsolute()) return path;
    
-   boolean use_contracts;
-   boolean use_junit;
-   boolean use_assertions;
-   
-   BubblesSettings(CodeStyleSettings cs) {
-      super(SETTINGS_TAG,cs);
-      use_contracts = false;
-      use_junit = false;
-      use_assertions = false;
+   if (File.pathSeparatorChar != '/') {
+      path = path.replace(File.pathSeparatorChar,'/');
     }
    
-   @Override public void readExternal(Element par) {
-      Element child = par.getChild(SETTINGS_TAG);
-      use_contracts = getBool(child,"CONTRACTS");
-      use_junit = getBool(child,"JUNIT");
-      use_assertions = getBool(child,"ASSERTIONS");
-    }
-      
-   @Override public void writeExternal(Element par,CustomCodeStyleSettings parset) {
-      Element child = new Element(SETTINGS_TAG);
-      child.setAttribute("CONTRACTS",Boolean.toString(use_contracts));
-      child.setAttribute("JUNIT",Boolean.toString(use_junit));
-      child.setAttribute("ASSERTIONS",Boolean.toString(use_assertions));
-    }
-   
-   private boolean getBool(Element elt,String id) {
-      try {
-         if (elt == null) return false;
-         Attribute att = elt.getAttribute(id);
-         if (att == null) return false;
-         return att.getBooleanValue();
+   for (Module m : known_modules) {
+      if (p != null && m.getProject() != p) continue;
+      List<VirtualFile> roots;
+      List<VirtualFile> excl = null;
+      if (all) roots = BubjetUtil.getContentRoots(m);
+      else {
+         roots = BubjetUtil.getSourceRoots(m);
+         excl = BubjetUtil.getExcludeRoots(m);
        }
-      catch (DataConversionException e) { }
-      return false;
+      find: for (VirtualFile root : roots) {
+         if (excl != null) {
+            for (VirtualFile ve : excl) {
+               if (ve.equals(root)) continue find;
+             }
+          }
+         VirtualFile v1 = root.findFileByRelativePath(path);
+         if (v1 != null && v1.exists()) {
+            return BubjetUtil.outputFileName(v1);
+          }
+       }
     }
    
-}       // end of inner class BubblesSettings
+   return null;
+}
+
+
+
+
+
+
+
+
 
 
 }       // end of class BubjetProjectManager

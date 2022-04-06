@@ -23,7 +23,6 @@
 package edu.brown.cs.bubbles.bubjet;
 
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.util.Condition;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -53,11 +52,11 @@ import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.PsiWhiteSpace;
+import com.intellij.psi.impl.file.PsiPackageBase;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.IndexPattern;
 import com.intellij.psi.search.PsiSearchHelper;
 import com.intellij.psi.search.UsageSearchContext;
-import com.intellij.psi.search.searches.AllClassesSearch;
 import com.intellij.psi.search.searches.ClassInheritorsSearch;
 import com.intellij.psi.search.searches.OverridingMethodsSearch;
 import com.intellij.psi.search.searches.ReferencesSearch;
@@ -71,14 +70,13 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.StringTokenizer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 
 import com.intellij.find.TextSearchService;
 import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleManager;
-import com.intellij.openapi.module.ModuleUtilCore;
 
 import edu.brown.cs.ivy.xml.IvyXmlWriter;
 import edu.brown.cs.ivy.file.IvyFile;
@@ -94,6 +92,8 @@ class BubjetSearchManager implements BubjetConstants
 /********************************************************************************/
 
 private BubjetApplicationService app_service;
+
+private static boolean source_pattern_search = true;
 
 
 
@@ -128,7 +128,7 @@ void handleFindAll(Project p,Module m,String file,int start,int end,
 }
 
 
-class FindAllAction extends BubjetAction.Read {
+class FindAllAction extends BubjetAction.SmartRead {
    
    private Project for_project;
    private Module for_module;
@@ -148,7 +148,7 @@ class FindAllAction extends BubjetAction.Read {
          boolean impls,boolean equiv,boolean exact,boolean system,boolean typeof,
          boolean ronly,boolean wonly,
          IvyXmlWriter xw) {
-      super(p,"Find All");
+      super(p,"*");
       for_project = p;
       for_module = m;
       for_file = file;
@@ -175,7 +175,7 @@ class FindAllAction extends BubjetAction.Read {
          if (e0 instanceof PsiField) {
             xml_writer.field("TYPE","Field");
           }
-         else if (e0 instanceof PsiLocalVariable) {
+         else if (e0 instanceof PsiLocalVariable || e0 instanceof PsiParameter) {
             xml_writer.field("TYPE","Local");
           }
          else if (e0 instanceof PsiClass) {
@@ -184,6 +184,7 @@ class FindAllAction extends BubjetAction.Read {
          else if (e0 instanceof PsiMethod) {
             xml_writer.field("TYPE","Function");
           }
+         else if (e0 instanceof PsiIdentifier) { }      // undefined
          else {
             BubjetLog.logE("Unknown element type " + e0 + " " + e0.getClass());
           }
@@ -195,6 +196,7 @@ class FindAllAction extends BubjetAction.Read {
    
       for (PsiElement elt : elts) {
          PsiElement e0 = BubjetUtil.getDefinitionElement(elt);
+         BubjetLog.logD("SEARCH base " + elt + " " + e0 + " " + do_defs + " " + do_refs + " " + do_implements);
          outputRelevantElements(e0,for_module,scp,do_defs,do_refs,do_implements,
                do_ronly,do_wonly,xml_writer);
        }
@@ -281,7 +283,8 @@ private void outputRelevantElements(PsiElement e0,Module m,GlobalSearchScope scp
 {
    if (e0 == null) return; 
    if (defs) {
-      outputElementResult(m,e0,e0,xw);
+      PsiElement e1 = BubjetUtil.getDefinitionIdentifier(e0);
+      outputElementResult(m,e1,e0,xw);
     }
    if (refs) {
       Query<PsiReference> q = ReferencesSearch.search(e0,scp);
@@ -399,17 +402,17 @@ private class QualifiedNameAction extends BubjetAction.Read {
 /*                                                                              */
 /********************************************************************************/
 
-void handleJavaSearch(Project p,Module m,String bid,String pat,
+void handlePatternSearch(Project p,Module m,String bid,String pat,
       String typ,boolean defs,boolean refs,boolean impls,boolean equiv,
       boolean exact,boolean system,IvyXmlWriter xw)
 {
-   JavaSearchAction jsa = new JavaSearchAction(p,m,pat,typ,defs,refs,impls,equiv,exact,system,xw);
+   PatternSearchAction jsa = new PatternSearchAction(p,m,pat,typ,defs,refs,impls,equiv,exact,system,xw);
    jsa.start();
   
 }
 
 
-private class JavaSearchAction extends BubjetAction.Read 
+private class PatternSearchAction extends BubjetAction.SmartRead 
    implements Condition<String>, Processor<PsiElement> {
    
    private Project for_project;
@@ -426,12 +429,12 @@ private class JavaSearchAction extends BubjetAction.Read
    private String short_name;
    private Set<PsiElement> all_defs;
    
-   JavaSearchAction(Project p,Module m,String pat,String typ,boolean defs,boolean refs,
+   PatternSearchAction(Project p,Module m,String pat,String typ,boolean defs,boolean refs,
          boolean impls,boolean equiv,boolean exact,boolean syst,IvyXmlWriter xw) {
-      super(p,"Pattern Search");
+      super(p,"*");
       for_project = p;
       for_module = m;
-      search_scope = BubjetUtil.getSearchScope(for_project,for_module);
+      search_scope = BubjetUtil.getSearchScope(p,m);
       search_pattern = pat;
       element_type = typ;
       do_defs = defs;
@@ -439,6 +442,9 @@ private class JavaSearchAction extends BubjetAction.Read
       do_impls = impls;
       xml_writer = xw;
       all_defs = new HashSet<>();
+      name_pattern = null;
+      class_name = null;
+      short_name = null;
     }
    
    @Override void process() {
@@ -469,14 +475,45 @@ private class JavaSearchAction extends BubjetAction.Read
             return;
        }
       
-      BubjetLog.logD("CLASS SEARCH " + short_name + " " + name_pattern + " " + class_name); 
-      Query<PsiClass> qc = AllClassesSearch.search(search_scope,for_project,this);
-      qc.forEach(this);
-      
-      BubjetLog.logD("FOUND " + all_defs.size() + " definitions");
+      BubjetLog.logD("Pattern search for " + class_name + " " + short_name + " " + name_pattern);
+      if (for_module == null) {
+         BubjetProjectManager bpm = app_service.getProjectManager();
+         for (Module m1 : bpm.getAllModules(for_project)) {
+            processModule(m1);
+          }
+       }
+      else {
+         processModule(for_module);
+       }
+   // BubjetLog.logD("CLASS SEARCH " + short_name + " " + name_pattern + " " + class_name); 
+   // Query<PsiClass> qc = AllClassesSearch.search(search_scope,for_project,this);
+   //  
+   // qc.forEach(this);
+   // 
+   // BubjetLog.logD("FOUND " + all_defs.size() + " definitions");
+    }
+   
+   private void processModule(Module m)  {
+      for (VirtualFile vf : BubjetUtil.findSourceFiles(m,null)) {
+         PsiFile pf = BubjetUtil.getPsiFile(for_project,vf);
+         if (pf instanceof PsiJavaFile) {
+            PsiJavaFile pjf = (PsiJavaFile) pf;
+            for (PsiClass pc : pjf.getClasses()) {
+               processClass(pc);
+             }
+          }
+       }
+   }
+   
+   private void processClass(PsiClass pc) {
+      if (isValidClassName(pc)) process(pc);
+      for (PsiClass innerclass : pc.getInnerClasses()) {
+         processClass(innerclass);
+       }
     }
    
    @Override public boolean value(String s) {
+      BubjetLog.logD("Check short name " + s + " " + short_name + " " + name_pattern);
       if (short_name != null) return s.contains(short_name);
       if (name_pattern != null) {
          Matcher m = name_pattern.matcher(s);
@@ -589,14 +626,68 @@ private class JavaSearchAction extends BubjetAction.Read
    
    private boolean matchArgs(PsiMethod pm,String args) {
       if (args == null) return true;
-      BubjetLog.logD("MATCH method args " + pm.getParameters() + " " + args);
+      List<String> arglist = getArgList(args);
+      BubjetLog.logD("MATCH method args " + pm.getParameterList() + " " + args + " " + arglist);
+      
+      if (arglist.size() != pm.getParameterList().getParametersCount()) return false;
+      int ct = 0;
       for (PsiParameter pp : pm.getParameterList().getParameters()) {
          PsiType ptyp = pp.getType();
+         String arg = arglist.get(ct++);
+         String t1 = simpleTypeName(ptyp.getCanonicalText());
+         String t2 = simpleTypeName(ptyp.getPresentableText());
          BubjetLog.logD("PARAMETER " + ptyp.getCanonicalText() + " " +
-               ptyp.getPresentableText());
+               ptyp.getPresentableText() + " " + arg + " " + t1 + " " + t2);
+         if (!arg.equals(t1) && !arg.equals(t2)) return false;
        }
+      
       return true;
     }
+   
+   
+   private List<String> getArgList(String s)
+   {
+      List<String> rslt = new ArrayList<>();
+      
+      StringTokenizer tok = new StringTokenizer(s,"(<,>)",true);
+      int lvl = 0;
+      String curparam = null;
+      while (tok.hasMoreTokens()) {
+         String t = tok.nextToken();
+         switch (t) {
+            case "(" :
+               break;
+            case "<" :
+               ++lvl;
+               break;
+            case ">" :
+               --lvl;
+               break;
+            case "," :
+            case ")" :
+               if (curparam != null) {
+                  rslt.add(curparam.trim());
+                  curparam = null;
+                }
+               break;
+            default :
+               if (lvl == 0) {
+                  if (curparam == null) curparam = t;
+                  else curparam += t;
+                }
+               break;
+          }
+       }
+      
+      return rslt;
+   }
+   
+   private String simpleTypeName(String t)
+   {
+      int idx = t.indexOf("<");
+      if (idx > 0) return t.substring(0,idx);
+      return t;
+   }
    
    private boolean isValidClassType(PsiClass pc) {
       boolean iface = pc.isInterface();
@@ -830,7 +921,7 @@ private class FindHierarchyAction extends BubjetAction.Read {
    private IvyXmlWriter xml_writer;
    
    FindHierarchyAction(Project p,Module m,String pkg,String cls,IvyXmlWriter xw) {
-      super(p,"Find Hierarchy");
+      super(p,"*");
       for_project = p;
       for_module = m;
       for_package = pkg;
@@ -839,7 +930,6 @@ private class FindHierarchyAction extends BubjetAction.Read {
     }
    
    @Override void process() {
-      
       GlobalSearchScope scp = BubjetUtil.getSearchScope(for_project,for_module);
       TypeHierarchy th = new TypeHierarchy(scp);
       if (for_class != null) {
@@ -855,9 +945,8 @@ private class FindHierarchyAction extends BubjetAction.Read {
          else BubjetLog.logD("Can't find package element for " + for_package);
        }
       else if (for_module != null) {
-         ModuleRootManager mrm = ModuleRootManager.getInstance(for_module);
          PsiManager pm = PsiManager.getInstance(for_project);
-         for (VirtualFile vf : mrm.getContentRoots()) {
+         for (VirtualFile vf : BubjetUtil.getContentRoots(for_module)) {
             PsiFile pf = pm.findFile(vf);
             PsiDirectory pd = pm.findDirectory(vf);
             if (pd != null) addAllClasses(pd,th);
@@ -868,11 +957,9 @@ private class FindHierarchyAction extends BubjetAction.Read {
           }
        }
       else {
-         ModuleManager mm = ModuleManager.getInstance(for_project);
          PsiManager pm = PsiManager.getInstance(for_project);
-         for (Module mod : mm.getModules()) {
-            ModuleRootManager mrm = ModuleRootManager.getInstance(mod);
-            for (VirtualFile vf : mrm.getContentRoots()) {
+         for (Module mod : BubjetUtil.getAllModules(for_project)) {
+            for (VirtualFile vf : BubjetUtil.getContentRoots(mod)) {
                PsiFile pf = pm.findFile(vf);
                PsiDirectory pd = pm.findDirectory(vf);
                if (pd != null) addAllClasses(pd,th);
@@ -902,6 +989,7 @@ private void addAllClasses(PsiElement pe,TypeHierarchy th)
    if (pe instanceof PsiWhiteSpace) return;
    if (pe instanceof PsiPackageStatement) return;
    if (pe instanceof PsiImportList) return;
+   if (pe instanceof PsiPackageBase) return;
    
    if (pe instanceof PsiClass) {
       BubjetLog.logD("Add hierarchy class " + pe);
@@ -993,8 +1081,7 @@ private class FindByKeyAction extends BubjetAction.Read {
       String type = comps[1];
       String cls = comps[2];
       
-      ModuleManager mm = ModuleManager.getInstance(for_project);
-      Module emod = mm.findModuleByName(modnm);
+      Module emod = BubjetUtil.findModuleByName(for_project,modnm);
       
       if (for_module != null && emod != for_module) return;
       
@@ -1113,7 +1200,7 @@ private class FindRegionsAction extends BubjetAction.Read {
       if (pf == null) {
          throw new BubjetException("Can find project file for " + for_file + " " + for_class);
        }
-      if (for_module == null) for_module = ModuleUtilCore.findModuleForFile(pf);
+      if (for_module == null) for_module = BubjetUtil.findModuleForFile(pf);
       
       int start = 0;
       PsiClass [] pccs = pf.getClasses();
@@ -1290,10 +1377,11 @@ private class QueryRefResult implements Processor<PsiReference> {
     }
    
    @Override public boolean process(PsiReference pr) {
-      BubjetLog.logD("QUERY RRESULT " + pr.getElement() + " " +
+      BubjetLog.logD("QUERY RRESULT " + pr.getElement() + " " + def_element + " " + 
             pr.getElement().getTextRange() + " " + pr.resolve());
       if (filterResult(pr.getElement())) {
-         outputElementResult(for_module,pr.getElement(),def_element,xml_writer);
+         PsiElement ce = BubjetUtil.getContainingElement(pr.getElement());
+         outputElementResult(for_module,pr.getElement(),ce,xml_writer);
        }
       return true;
     }
@@ -1330,7 +1418,7 @@ private class QueryTextResult {
       xml_writer.textElement("FILE",BubjetUtil.outputFileName(vf));
       PsiFile pf = psi_manager.findFile(vf);
       if (pf != null) {
-         Module m = ModuleUtilCore.findModuleForFile(pf);
+         Module m = BubjetUtil.findModuleForFile(pf);
          PsiElement pe = PsiUtil.getElementAtOffset(pf,start);
          BubjetLog.logD("Found element " + pe + " " + pe.getTextRange() + " " + m);
          if (pe != null && pe.getTextLength() >= end-start) {

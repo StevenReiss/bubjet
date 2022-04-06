@@ -10,6 +10,8 @@
 package edu.brown.cs.bubbles.bubjet;
 
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.wm.WindowManager;
+import com.intellij.openapi.wm.ex.ToolWindowManagerListener;
 import com.intellij.problems.ProblemListener;
 import com.intellij.task.ProjectTaskListener;
 import com.intellij.task.ProjectTaskManager;
@@ -19,6 +21,9 @@ import com.intellij.util.messages.MessageBus;
 import com.intellij.debugger.DebuggerManagerEx;
 import com.intellij.debugger.ui.breakpoints.BreakpointManager;
 import com.intellij.xdebugger.XDebuggerManager;
+
+import javax.swing.JFrame;
+
 import com.intellij.ProjectTopics;
 import com.intellij.analysis.problemsView.ProblemsListener;
 import com.intellij.build.BuildViewManager;
@@ -40,6 +45,7 @@ public final class BubjetProjectService {
 /****************************************************************************************/
 
 private Project 	for_project;
+private boolean         hide_window;
 
 
 
@@ -65,12 +71,20 @@ public BubjetProjectService(Project project)
 
    BubjetLog.logD("Project service initialized for " + for_project.getName());
    
+   String hideprop = System.getProperty("edu.brown.cs.bubbles.hideidea");
+   if (hideprop != null && (hideprop.startsWith("t") || hideprop.startsWith("T") ||
+         hideprop.startsWith("1")))
+      hide_window = true;
+   else  
+      hide_window = false;
+   
    BubjetProjectTaskListener taskl = new BubjetProjectTaskListener(project);
    BubjetProblemListener probs = new BubjetProblemListener(project);
    BubjetModuleListener ml = new BubjetModuleListener(project);
    BubjetCompilationStatusListener compl = new BubjetCompilationStatusListener(project);
    
    Application app = ApplicationManager.getApplication();
+   
    MessageBus mbus = app.getMessageBus();
    mbus.connect().subscribe(ProblemsListener.TOPIC,probs);
    mbus.connect().subscribe(ProblemListener.TOPIC,probs);
@@ -87,14 +101,17 @@ public BubjetProjectService(Project project)
    mbus.connect().subscribe(ProblemListener.TOPIC,probs);
    mbus.connect().subscribe(CompilerTopics.COMPILATION_STATUS,compl);
    mbus.connect().subscribe(ProjectTaskListener.TOPIC,taskl);
+   mbus.connect().subscribe(ToolWindowManagerListener.TOPIC,new BubjetToolWindowListener(project));
    ProjectTaskManagerImpl ptm = (ProjectTaskManagerImpl) ProjectTaskManager.getInstance(project);
    ptm.addListener(taskl);
    TaskManager tm = TaskManager.getManager(project);
    tm.addTaskListener(taskl,project);
-  
    
-// XBreakpointManager xmgr = XDebuggerManager.getInstance(project).getBreakpointManager();
-// xmgr.addBreakpointListener(new BubjetBreakpointListener(project));
+   WindowManager wm = WindowManager.getInstance();
+   JFrame jf = wm.getFrame(project);
+   BubjetLog.logD("FRAMES FOUND " + jf + " " + jf.isShowing() + " " + jf.isDisplayable() + " " +
+         jf.isVisible() + " " + jf.isActive() + " " + jf.isValid() + " " + jf.isValidateRoot());
+   if (hide_window) jf.setVisible(false);
    
    DebuggerManagerEx dbg = DebuggerManagerEx.getInstanceEx(project);
    BreakpointManager bpt = dbg.getBreakpointManager();

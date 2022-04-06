@@ -1,6 +1,6 @@
 /********************************************************************************/
 /*                                                                              */
-/*              BubjetDebuggerListener.java                                     */
+/*              BubjetSettings.java                                             */
 /*                                                                              */
 /*      description of class                                                    */
 /*                                                                              */
@@ -22,12 +22,29 @@
 
 package edu.brown.cs.bubbles.bubjet;
 
-import com.intellij.xdebugger.XDebuggerManagerListener;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.components.PersistentStateComponent;
+import com.intellij.openapi.components.State;
+import com.intellij.openapi.components.Storage;
 import com.intellij.openapi.project.Project;
-import com.intellij.xdebugger.XDebugSessionListener;
+import com.intellij.util.xmlb.XmlSerializerUtil;
 
-public class BubjetDebuggerListener implements XDebuggerManagerListener, XDebugSessionListener
+@State(name="edu.brown.cs.bubbles.bubjet.BubjetSettings",
+      storages= @Storage("BubblesSettings.xml")
+)
+public class BubjetSettings implements PersistentStateComponent<BubjetSettings>, BubjetConstants
 {
+
+
+/********************************************************************************/
+/*                                                                              */
+/*      Private Storage                                                         */
+/*                                                                              */
+/********************************************************************************/
+
+private boolean use_contracts;
+private boolean use_junit;
+private boolean use_assertions;
 
 
 
@@ -37,99 +54,67 @@ public class BubjetDebuggerListener implements XDebuggerManagerListener, XDebugS
 /*                                                                              */
 /********************************************************************************/
 
-public BubjetDebuggerListener()
+public static BubjetSettings getInstance() 
 {
-   BubjetLog.logD("Bubjet debugger listener created");
+   return ApplicationManager.getApplication().getService(BubjetSettings.class);
+} 
+
+
+public BubjetSettings()
+{
+   BubjetLog.logD("BubjetSettings initialized without a project");
 }
 
 
-public BubjetDebuggerListener(Project proj)
+public BubjetSettings(Project p)
 {
-   BubjetLog.logD("Bubjet debugger listener created for " + proj);
+   BubjetLog.logD("BubjetSettings service initalized for " + p.getName());
+   
+   use_contracts = false;
+   use_junit = false;
+   use_assertions = false;
 }
-
 
 
 
 /********************************************************************************/
 /*                                                                              */
-/*      XDebuggerManager interface                                              */
+/*      Access methods                                                          */
 /*                                                                              */
 /********************************************************************************/
 
-@Override public void processStarted(com.intellij.xdebugger.XDebugProcess proc)
-{
-   BubjetLog.logD("XD processStarted " + proc);
-   proc.getSession().addSessionListener(this);
-}
+boolean getUseContracts()                       { return use_contracts; }
+boolean getUseJunit()                           { return use_junit; }
+boolean getUseAssertions()                      { return use_assertions; }
 
+void setUseContracts(boolean fg)                { use_contracts = fg; }
+void setUseJunit(boolean fg)                    { use_junit = fg; }
+void setUseAssertions(boolean fg)               { use_assertions = fg; }
 
-@Override public void processStopped(com.intellij.xdebugger.XDebugProcess proc)
-{
-  BubjetLog.logD("XD processStopped " + proc);
-}
-
-
-@Override public void currentSessionChanged(com.intellij.xdebugger.XDebugSession sess0,com.intellij.xdebugger.XDebugSession sess1)
-{
-   BubjetLog.logD("XD currentSessionChanged " + sess0 + " " + sess1);
-}
 
 
 /********************************************************************************/
 /*                                                                              */
-/*      Debug Session interface                                                 */
+/*      State methods                                                           */
 /*                                                                              */
 /********************************************************************************/
 
-@Override public void sessionPaused()
+@Override public BubjetSettings getState()              { return this; }
+
+
+@Override public void loadState(BubjetSettings state) 
 {
-   BubjetLog.logD("XD sessionPaused");
+   BubjetLog.logD("Load state for BubjetSettings: " + state);
+   XmlSerializerUtil.copyBean(state,this);
 }
 
 
 
-@Override public void sessionResumed()
-{
-   BubjetLog.logD("XD sessionResumed");
-}
 
-
-@Override public void sessionStopped()
-{
-   BubjetLog.logD("XD sessionStopped");
-}
-
-
-@Override public void stackFrameChanged()
-{
-   BubjetLog.logD("stackFrameChanged");
-}
-
-
-@Override public void beforeSessionResume()
-{
-   BubjetLog.logD("beforeSessionResume");
-}
-
-
-@Override public void settingsChanged()
-{
-   BubjetLog.logD("settingsChanged");
-}
-
-
-public void breakpointsMuted(boolean fg)
-{
-   BubjetLog.logD("breakpointsMuted " + fg);
-}
-
-
-
-}       // end of class BubjetDebuggerListener
+}       // end of class BubjetSettings
 
 
 
 
-/* end of BubjetDebuggerListener.java */
+/* end of BubjetSettings.java */
 

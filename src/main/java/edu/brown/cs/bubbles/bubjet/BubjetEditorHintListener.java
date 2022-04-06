@@ -36,8 +36,6 @@ public class BubjetEditorHintListener implements EditorHintListener
 /*                                                                              */
 /********************************************************************************/
 
-
-
 @Override public void hintShown(Project project,LightweightHint hint,int flags)
 {
    BubjetLog.logD("hintShown " + hint + " " + flags);
